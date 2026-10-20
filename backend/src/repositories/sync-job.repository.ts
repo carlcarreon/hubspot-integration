@@ -371,5 +371,9 @@ function heldLeaseWhere(job: ClaimedSyncJob): Prisma.SyncJobWhereInput {
 }
 
 function sanitizeError(message: string): string {
-  return message.replace(/[\r\n]+/g, ' ').slice(0, 1_000);
+  return message
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\bBearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [redacted]')
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[redacted-email]')
+    .slice(0, 1_000);
 }

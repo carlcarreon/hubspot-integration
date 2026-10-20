@@ -7,6 +7,7 @@ import { notFoundHandler } from './middleware/not-found.js';
 import type { HealthRepository } from './repositories/health.repository.js';
 import type { OrderRepository } from './repositories/order.repository.js';
 import type { SyncMonitoringRepository } from './repositories/sync-monitoring.repository.js';
+import type { DealCsvExportService } from './services/deal-csv-export.service.js';
 import { createApiRouter } from './routes/index.js';
 import { createOrderWebhookRouter } from './routes/order-webhook.routes.js';
 import { OrderWebhookService } from './services/order-webhook.service.js';
@@ -16,6 +17,7 @@ type AppDependencies = {
   healthRepository: HealthRepository;
   orderRepository: OrderRepository;
   syncMonitoringRepository?: SyncMonitoringRepository;
+  dealCsvExportService?: DealCsvExportService;
 };
 
 export function createApp(

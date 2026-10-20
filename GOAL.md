@@ -169,6 +169,9 @@ Search for the Contact by email, create if missing, or update if found. Search/u
 | GET | `/api/syncs` | Last 50 sync attempts, newest first; optional status filter |
 | GET | `/api/syncs/stats` | Counts by status for dashboard (define whether counts are orders or attempts) |
 | GET | `/api/syncs/:id` | Attempt details, sanitized errors, HubSpot IDs |
+| GET | `/api/orders` | Paginated current order + durable job status; optional current-status filter |
+| GET | `/api/orders/:orderId/attempts` | Real immutable attempt history for one order |
+| GET | `/api/orders/failed` | Paginated current failed orders, including legacy failures without attempt rows |
 | POST | `/api/orders/:orderId/retry` | Authorize, retry **only failed** order, atomically requeue; return updated state |
 | GET | `/api/health` | Liveness/readiness as appropriate |
 
@@ -298,8 +301,10 @@ The layout is a recommendation. Adjust only when it clearly simplifies implement
 ### Phase 5 — Dashboard
 
 - [x] Implement protected sync list/details/statistics endpoints and retry endpoint.
-- [x] Implement React dashboard with recent 50 attempts and status summaries.
-- [x] Display sanitized errors and available HubSpot IDs.
+- [x] Implement React dashboard with current-order status summaries, one unified Orders & Sync Status table, and a latest-50 real-attempts view.
+- [x] Query current orders server-side by status, expand only persisted per-order attempt history, and include legacy failed orders that predate attempt auditing.
+- [x] Add server-side search and validated 10/20/50-row pagination with shareable dashboard URL state; never log search text.
+- [x] Display complete sanitized per-attempt errors, lifecycle times, available HubSpot diagnostics/IDs, and retry outcome in compact expandable history cards.
 - [x] Wire retry button to the real authenticated API; loading/success/error states work.
 - [x] Add API and React tests for authentication, response shape/order, retry conflict handling, loading, and retry behavior.
 
@@ -307,13 +312,14 @@ The layout is a recommendation. Adjust only when it clearly simplifies implement
 
 ### Phase 6 — Python accounting export
 
-- [ ] Implement real HubSpot Deal fetch with seven-day creation-date filter.
-- [ ] Handle pagination and 429/5xx retry.
-- [ ] Write a valid UTF-8 CSV with headers and required Deal fields.
-- [ ] Add runnable CLI examples and an empty-result behavior.
-- [ ] Test date filtering and pagination with mocked responses.
+- [x] Implement a read-only real HubSpot Deal fetch with rolling UTC creation-date filter.
+- [x] Handle pagination and bounded 429/5xx/network retry with Retry-After support.
+- [x] Write a valid UTF-8 CSV with headers, required Deal fields, and decimal strings preserved.
+- [x] Add runnable Python 3.11 CLI examples, configurable output/days, and header-only empty-result behavior.
+- [x] Test UTC filtering, pagination, empty/missing values, quoting, authorization/network failures, and retries with mocked responses.
+- [x] Add a protected dashboard CSV download that invokes the unchanged Python CLI server-side with isolated temporary files, timeout, cleanup, and bounded concurrency.
 
-**Acceptance:** with credentials, running the Python script exports all matching deals; when no deals match, it writes a header-only CSV.
+**Acceptance:** with credentials, running the standalone read-only Python script exports all matching Deals; when no Deals match, it writes a header-only CSV.
 
 ### Phase 7 — Tests, documentation, and submission
 
@@ -342,10 +348,12 @@ The layout is a recommendation. Adjust only when it clearly simplifies implement
 - [x] Association failure preserves IDs so retry does not recreate Deal
 - [x] Sync records contain attempt history, HubSpot IDs, errors, timestamps
 - [x] Dashboard shows the 50 most recent attempts
+- [x] Dashboard unified order list reconciles Failed filtering with the Failed summary and can retry eligible legacy failed orders
 - [x] Manual retry of failed order works and blocks duplicate claims
 - [x] Expired processing jobs survive worker restart through safe lease recovery
 - [x] Development-only PostgreSQL verification demonstrates retry scheduling, exhaustion, attempt history, and lease recovery
-- [ ] Python CSV uses create date, covers entire window, paginates, and includes headers
+- [x] Python CSV uses create date, covers entire window, paginates, and includes headers
+- [x] Dashboard CSV download authenticates, validates days, handles subprocess failure/timeout, and never exposes HubSpot credentials
 - [ ] README is executable on fresh clone
 
 ## Completion definition

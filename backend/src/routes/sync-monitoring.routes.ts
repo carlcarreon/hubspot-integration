@@ -11,6 +11,9 @@ export function createSyncMonitoringRouter(
   router.get('/syncs', controller.list);
   router.get('/syncs/stats', controller.stats);
   router.get('/syncs/:id', controller.detail);
+  router.get('/orders', controller.orders);
+  router.get('/orders/failed', controller.failedOrders);
+  router.get('/orders/:orderId/attempts', controller.orderAttempts);
   router.post('/orders/:orderId/retry', controller.retry);
   return router;
 }

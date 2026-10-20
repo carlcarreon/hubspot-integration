@@ -9,3 +9,6 @@ generated/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# Python virtual environment
+.venv/

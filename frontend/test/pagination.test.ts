@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pageRange } from './pagination';
+import { pageRange } from '../src/components/pagination';
 
 describe('pageRange', () => {
   it('shows every page when the range is small', () => {

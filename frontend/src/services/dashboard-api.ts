@@ -55,12 +55,20 @@ type ApiEnvelope<T> = { data: T };
 type ApiErrorBody = { error?: { message?: string } };
 
 export class DashboardApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
     super(message);
   }
 }
 
-export async function getSyncs(orderStatus: OrderStatus | undefined, q: string, limit: number, page: number): Promise<SyncAttemptsPage> {
+export async function getSyncs(
+  orderStatus: OrderStatus | undefined,
+  q: string,
+  limit: number,
+  page: number,
+): Promise<SyncAttemptsPage> {
   const parameters = new URLSearchParams({ q, limit: String(limit), page: String(page) });
   if (orderStatus) {
     parameters.set('orderStatus', orderStatus);
@@ -72,7 +80,12 @@ export function getStats(): Promise<DashboardStats> {
   return request<DashboardStats>('/api/syncs/stats');
 }
 
-export async function getOrders(status: OrderStatus | undefined, q: string, limit: number, page: number): Promise<OrdersPage> {
+export async function getOrders(
+  status: OrderStatus | undefined,
+  q: string,
+  limit: number,
+  page: number,
+): Promise<OrdersPage> {
   const parameters = new URLSearchParams({ q, limit: String(limit), page: String(page) });
   if (status) {
     parameters.set('status', status);
@@ -110,7 +123,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...init,
     headers: { ...init.headers },
   });
-  const body = await response.json() as ApiEnvelope<T> & ApiErrorBody;
+  const body = (await response.json()) as ApiEnvelope<T> & ApiErrorBody;
   if (!response.ok) {
     throw new DashboardApiError(body.error?.message ?? 'The dashboard request failed.', response.status);
   }
@@ -119,7 +132,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 async function pagedRequest<T>(path: string): Promise<T> {
   const response = await fetch(path);
-  const body = await response.json() as T & ApiErrorBody;
+  const body = (await response.json()) as T & ApiErrorBody;
   if (!response.ok) {
     throw new DashboardApiError(body.error?.message ?? 'The dashboard request failed.', response.status);
   }
@@ -128,7 +141,7 @@ async function pagedRequest<T>(path: string): Promise<T> {
 
 async function errorMessage(response: Response): Promise<string> {
   try {
-    const body = await response.json() as ApiErrorBody;
+    const body = (await response.json()) as ApiErrorBody;
     return body.error?.message ?? 'The dashboard request failed.';
   } catch {
     return 'The dashboard request failed.';

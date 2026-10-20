@@ -1,0 +1,85 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum OrderStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+}
+
+enum AttemptStatus {
+  PROCESSING
+  SUCCESS
+  FAILED
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model Order {
+  id                   String        @id @default(cuid())
+  orderId              String        @unique @map("order_id")
+  payload              Json
+  status               OrderStatus   @default(PENDING)
+  hubspotContactId     String?       @map("hubspot_contact_id")
+  hubspotDealId        String?       @map("hubspot_deal_id")
+  nextRetryAt          DateTime?     @map("next_retry_at")
+  processingLeaseUntil DateTime?     @map("processing_lease_until")
+  createdAt            DateTime      @default(now()) @map("created_at")
+  updatedAt            DateTime      @updatedAt @map("updated_at")
+  syncAttempts         SyncAttempt[]
+  syncJob              SyncJob?
+
+  @@index([status, nextRetryAt])
+  @@index([processingLeaseUntil])
+  @@map("orders")
+}
+
+model SyncAttempt {
+  id               String        @id @default(cuid())
+  orderId          String        @map("order_id")
+  attemptNumber    Int           @map("attempt_number")
+  status           AttemptStatus @default(PROCESSING)
+  hubspotContactId String?       @map("hubspot_contact_id")
+  hubspotDealId    String?       @map("hubspot_deal_id")
+  errorMessage     String?       @map("error_message") @db.Text
+  startedAt        DateTime      @default(now()) @map("started_at")
+  completedAt      DateTime?     @map("completed_at")
+  order            Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, attemptNumber])
+  @@index([startedAt])
+  @@index([status, startedAt])
+  @@map("sync_attempts")
+}
+
+// This is the durable queue foundation. A future job worker claims jobs with a
+// lease and records individual processing runs in SyncAttempt.
+model SyncJob {
+  id                 String    @id @default(cuid())
+  orderId            String    @unique @map("order_id")
+  status             JobStatus @default(PENDING)
+  availableAt        DateTime  @default(now()) @map("available_at")
+  processingLeaseUntil DateTime? @map("processing_lease_until")
+  attempts           Int       @default(0)
+  maxAttempts        Int       @default(8) @map("max_attempts")
+  lastError          String?   @map("last_error") @db.Text
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+  order              Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([status, availableAt])
+  @@index([processingLeaseUntil])
+  @@map("sync_jobs")
+}

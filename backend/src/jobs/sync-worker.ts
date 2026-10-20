@@ -3,6 +3,7 @@ import { loadEnvironment, requireHubSpotEnvironment } from '../config/env.js';
 import { PrismaSyncJobRepository } from '../repositories/sync-job.repository.js';
 import { HubSpotHttpClient } from '../services/hubspot-client.service.js';
 import { HubSpotSyncService } from '../services/hubspot-sync.service.js';
+import { RetryPolicy } from './retry-policy.js';
 import { SyncJobWorker } from './sync-job-worker.js';
 
 const environment = loadEnvironment();
@@ -17,6 +18,7 @@ const worker = new SyncJobWorker(
   syncJobRepository,
   hubSpotSyncService,
   environment.WORKER_LEASE_SECONDS * 1_000,
+  new RetryPolicy(environment.WORKER_RETRY_BASE_DELAY_MS, environment.WORKER_RETRY_MAX_DELAY_MS),
 );
 
 let stopping = false;

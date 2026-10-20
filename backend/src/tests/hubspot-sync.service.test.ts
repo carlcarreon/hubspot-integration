@@ -8,6 +8,11 @@ const configuration = { pipelineId: 'pipeline-1', dealStageId: 'stage-1' };
 function createJob(overrides: Partial<ClaimedSyncJob['order']> = {}): ClaimedSyncJob {
   return {
     id: 'job-1',
+    attemptId: 'attempt-1',
+    attemptNumber: 1,
+    attempts: 1,
+    maxAttempts: 8,
+    leaseUntil: new Date('2026-10-20T00:05:00.000Z'),
     order: {
       id: 'order-1',
       orderId: 'ORD-10482',
@@ -53,6 +58,7 @@ function createRepository(): SyncJobRepository & { savedIds: Array<{ orderId: st
     claimNext: vi.fn(),
     saveHubSpotIds: vi.fn(async (orderId, ids) => { savedIds.push({ orderId, ids }); }),
     complete: vi.fn(),
+    reschedule: vi.fn(),
     fail: vi.fn(),
   };
 }
@@ -122,5 +128,38 @@ describe('HubSpotSyncService', () => {
     expect(hubSpotClient.createDeal).not.toHaveBeenCalled();
     expect(hubSpotClient.updateDeal).toHaveBeenCalledWith('deal-reconciled', expect.any(Object));
     expect(hubSpotClient.associateDealWithContact).toHaveBeenCalledWith('deal-reconciled', 'contact-persisted');
+  });
+
+  it('persists both remote IDs before an association failure so a later attempt does not create duplicates', async () => {
+    const hubSpotClient = createHubSpotClient({
+      associateDealWithContact: vi.fn().mockRejectedValue(new Error('association unavailable')),
+    });
+    const repository = createRepository();
+    const service = new HubSpotSyncService(hubSpotClient, repository, configuration);
+
+    await expect(service.synchronize(createJob())).rejects.toThrow('association unavailable');
+
+    expect(repository.savedIds).toEqual([
+      { orderId: 'order-1', ids: { contactId: 'contact-created' } },
+      { orderId: 'order-1', ids: { dealId: 'deal-created' } },
+    ]);
+  });
+
+  it('updates persisted partial records instead of searching or creating duplicates after a retry', async () => {
+    const hubSpotClient = createHubSpotClient();
+    const repository = createRepository();
+    const service = new HubSpotSyncService(hubSpotClient, repository, configuration);
+
+    await service.synchronize(createJob({
+      hubspotContactId: 'contact-persisted',
+      hubspotDealId: 'deal-persisted',
+    }));
+
+    expect(hubSpotClient.findContactByEmail).not.toHaveBeenCalled();
+    expect(hubSpotClient.findDealByExternalOrderId).not.toHaveBeenCalled();
+    expect(hubSpotClient.createContact).not.toHaveBeenCalled();
+    expect(hubSpotClient.createDeal).not.toHaveBeenCalled();
+    expect(hubSpotClient.updateContact).toHaveBeenCalledWith('contact-persisted', expect.any(Object));
+    expect(hubSpotClient.updateDeal).toHaveBeenCalledWith('deal-persisted', expect.any(Object));
   });
 });

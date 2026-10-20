@@ -17,6 +17,7 @@
     "build": "npm run build --workspaces",
     "lint": "npm run lint --workspaces",
     "test": "npm run test --workspaces",
+    "test:phase4:verify": "npm run test:phase4:verify --workspace @hubspot-order-sync/backend",
     "db:generate": "npm run db:generate --workspace @hubspot-order-sync/backend",
     "db:migrate:dev": "npm run db:migrate:dev --workspace @hubspot-order-sync/backend",
     "db:migrate:deploy": "npm run db:migrate:deploy --workspace @hubspot-order-sync/backend",

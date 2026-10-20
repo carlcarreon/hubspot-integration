@@ -22,6 +22,9 @@ const environmentSchema = z.object({
   HUBSPOT_DEAL_STAGE_ID: optionalString,
   WORKER_POLL_INTERVAL_MS: z.coerce.number().int().min(100).max(60_000).default(1_000),
   WORKER_LEASE_SECONDS: z.coerce.number().int().min(30).max(3_600).default(300),
+  WORKER_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(25).default(8),
+  WORKER_RETRY_BASE_DELAY_MS: z.coerce.number().int().min(100).max(3_600_000).default(1_000),
+  WORKER_RETRY_MAX_DELAY_MS: z.coerce.number().int().min(100).max(3_600_000).default(60_000),
 });
 
 export type Environment = z.infer<typeof environmentSchema>;

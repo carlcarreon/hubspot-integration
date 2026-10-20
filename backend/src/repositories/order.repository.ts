@@ -32,7 +32,10 @@ const storedOrderSelect = {
 } satisfies Prisma.OrderSelect;
 
 export class PrismaOrderRepository implements OrderRepository {
-  constructor(private readonly database: OrderClient) {}
+  constructor(
+    private readonly database: OrderClient,
+    private readonly maxJobAttempts = 8,
+  ) {}
 
   async createOrFindWithInitialJob(payload: OrderCreatedWebhook): Promise<CreateOrderResult> {
     try {
@@ -40,7 +43,7 @@ export class PrismaOrderRepository implements OrderRepository {
         data: {
           orderId: payload.order_id,
           payload: payload as Prisma.InputJsonValue,
-          syncJob: { create: {} },
+          syncJob: { create: { maxAttempts: this.maxJobAttempts } },
         },
         select: storedOrderSelect,
       });

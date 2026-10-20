@@ -285,14 +285,15 @@ The layout is a recommendation. Adjust only when it clearly simplifies implement
 
 ### Phase 4 — Reliability, logs, and recovery
 
-- [ ] Add 429/5xx retry with backoff, jitter, and `Retry-After` handling.
-- [ ] Store a `sync_attempts` record for each processing/manual retry attempt.
-- [ ] Handle failures at Contact, Deal, and association steps.
-- [ ] Make processing jobs restart-safe, with leases and retry scheduling.
-- [ ] Handle HubSpot success followed by a lost HTTP response without duplicates.
-- [ ] Ensure failed orders can be manually requeued without racing an active worker.
+- [x] Add bounded 429/5xx/network retry with exponential backoff, full jitter, and capped `Retry-After` handling.
+- [x] Store a `sync_attempts` record for every worker processing attempt, with IDs, status, error, and timestamps.
+- [x] Persist partial Contact/Deal IDs and handle failures at Contact, Deal, and association steps.
+- [x] Make processing jobs restart-safe through exact lease ownership, expired-lease recovery, and scheduled retry claiming.
+- [x] Handle HubSpot success followed by a lost HTTP response without duplicates via persisted IDs and `external_order_id` reconciliation.
+- [x] Add an opt-in PostgreSQL verification suite with mocked HubSpot 429/500/503/400 responses and no real HubSpot writes.
+- [ ] Ensure failed orders can be manually requeued without racing an active worker. (Phase 5 API/dashboard work.)
 
-**Acceptance:** transient failures recover; exhausted/permanent failures have inspectable records; interrupted and partially successful operations resume safely.
+**Acceptance:** transient failures recover through durable scheduled retries; exhausted/permanent failures have inspectable attempt history; interrupted and partially successful operations resume safely without duplicate Deals.
 
 ### Phase 5 — Dashboard
 
@@ -335,14 +336,15 @@ The layout is a recommendation. Adjust only when it clearly simplifies implement
 - [x] Existing Contact updated; new Contact created
 - [x] Deal has expected name, amount, configured stage, pipeline, currency, and close date
 - [x] Contact–Deal association is created idempotently
-- [ ] 429 and 5xx trigger bounded retries
-- [ ] Non-retryable 4xx logged as failure
-- [ ] Deal creation succeeded but response was lost: recovery uses external ID
-- [ ] Association failure can be retried without recreating Deal
-- [ ] Sync records contain attempt history, HubSpot IDs, errors, timestamps
+- [x] 429 and 5xx trigger bounded retries with Retry-After support
+- [x] Non-retryable 4xx is logged and persisted as a permanent failure
+- [x] Deal creation succeeded but response was lost: recovery uses external ID
+- [x] Association failure preserves IDs so retry does not recreate Deal
+- [x] Sync records contain attempt history, HubSpot IDs, errors, timestamps
 - [ ] Dashboard shows the 50 most recent attempts
 - [ ] Manual retry of failed order works and blocks duplicate claims
-- [ ] Pending jobs survive process restart
+- [x] Expired processing jobs survive worker restart through safe lease recovery
+- [x] Development-only PostgreSQL verification demonstrates retry scheduling, exhaustion, attempt history, and lease recovery
 - [ ] Python CSV uses create date, covers entire window, paginates, and includes headers
 - [ ] README is executable on fresh clone
 

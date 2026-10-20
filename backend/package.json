@@ -11,6 +11,7 @@
     "lint": "eslint src prisma.config.ts",
     "test": "vitest run --dir src",
     "test:watch": "vitest --dir src",
+    "test:phase4:verify": "RUN_PHASE4_DB_VERIFICATION=1 vitest run --dir src src/tests/phase4.database-verification.test.ts",
     "db:generate": "prisma generate",
     "db:migrate:dev": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",

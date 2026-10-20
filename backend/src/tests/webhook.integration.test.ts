@@ -16,10 +16,13 @@ const testEnvironment: Environment = {
   WEBHOOK_SIGNING_SECRET: signingSecret,
   WORKER_POLL_INTERVAL_MS: 1_000,
   WORKER_LEASE_SECONDS: 300,
+  WORKER_MAX_ATTEMPTS: 8,
+  WORKER_RETRY_BASE_DELAY_MS: 1_000,
+  WORKER_RETRY_MAX_DELAY_MS: 60_000,
 };
 const app = createApp({
   healthRepository: new PrismaHealthRepository(prisma),
-  orderRepository: new PrismaOrderRepository(prisma),
+  orderRepository: new PrismaOrderRepository(prisma, testEnvironment.WORKER_MAX_ATTEMPTS),
 }, testEnvironment);
 const createdOrderIds = new Set<string>();
 

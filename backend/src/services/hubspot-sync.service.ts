@@ -14,6 +14,11 @@ export type HubSpotSyncConfiguration = {
   dealStageId: string;
 };
 
+export type HubSpotSyncResult = {
+  contactId: string;
+  dealId: string;
+};
+
 export class HubSpotSyncService {
   constructor(
     private readonly hubSpotClient: HubSpotClient,
@@ -25,7 +30,7 @@ export class HubSpotSyncService {
     await this.hubSpotClient.ensureExternalOrderIdProperty();
   }
 
-  async synchronize(job: ClaimedSyncJob): Promise<void> {
+  async synchronize(job: ClaimedSyncJob): Promise<HubSpotSyncResult> {
     const payload = orderCreatedWebhookSchema.parse(job.order.payload);
     const contactInput: HubSpotContactInput = {
       email: payload.customer.email.trim().toLowerCase(),
@@ -44,6 +49,7 @@ export class HubSpotSyncService {
     // The dated default-association endpoint is idempotent, allowing an
     // interrupted run to repeat this final step without duplicate records.
     await this.hubSpotClient.associateDealWithContact(dealId, contactId);
+    return { contactId, dealId };
   }
 
   private async synchronizeContact(job: ClaimedSyncJob, input: HubSpotContactInput): Promise<string> {

@@ -30,9 +30,34 @@ export interface HubSpotClient {
   associateDealWithContact(dealId: string, contactId: string): Promise<void>;
 }
 
+export type HubSpotErrorMetadata = {
+  category?: string;
+  correlationId?: string;
+  codes: string[];
+  messages: string[];
+  retryAfterMs?: number;
+};
+
 export class HubSpotApiError extends Error {
-  constructor(public readonly status: number, message = `HubSpot request failed with status ${status}.`) {
-    super(message);
+  constructor(
+    public readonly status: number,
+    public readonly metadata: HubSpotErrorMetadata,
+  ) {
+    super(formatHubSpotErrorMessage(status, metadata));
+    this.name = 'HubSpotApiError';
+  }
+
+  get retryable(): boolean {
+    return this.status === 429 || this.status >= 500;
+  }
+}
+
+export class HubSpotTransportError extends Error {
+  readonly retryable = true;
+
+  constructor(cause: unknown) {
+    super('HubSpot network request failed.', { cause });
+    this.name = 'HubSpotTransportError';
   }
 }
 
@@ -167,57 +192,119 @@ export class HubSpotHttpClient implements HubSpotClient {
   }
 
   private async request<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
-    const response = await this.fetchImplementation(`${apiBaseUrl}${path}`, {
-      ...init,
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${this.accessToken}`,
-        ...(init.body ? { 'Content-Type': 'application/json' } : {}),
-        ...init.headers,
-      },
-    });
+    let response: Response;
+    try {
+      response = await this.fetchImplementation(`${apiBaseUrl}${path}`, {
+        ...init,
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${this.accessToken}`,
+          ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+          ...init.headers,
+        },
+      });
+    } catch (error) {
+      throw new HubSpotTransportError(error);
+    }
 
     const text = await response.text();
 
     if (!response.ok) {
-      let details: string;
-
-      try {
-        const error = JSON.parse(text) as {
-          category?: string;
-          message?: string;
-          correlationId?: string;
-          errors?: Array<{
-            code?: string;
-            message?: string;
-          }>;
-        };
-
-        details = JSON.stringify({
-          category: error.category,
-          message: error.message,
-          correlationId: error.correlationId,
-          errors: error.errors?.map((item) => ({
-            code: item.code,
-            message: item.message,
-          })),
-        });
-      } catch {
-        details = text.length > 0 ? 'Non-JSON error response' : 'No error details returned';
-      }
+      const metadata = parseHubSpotErrorMetadata(text, response.headers.get('retry-after'));
 
       console.error('HubSpot API failure:', {
         method: init.method ?? 'GET',
         path,
         status: response.status,
-        details,
+        category: metadata.category,
+        correlationId: metadata.correlationId,
+        codes: metadata.codes,
       });
 
-      throw new HubSpotApiError(response.status);
+      throw new HubSpotApiError(response.status, metadata);
     }
 
     return text.length === 0 ? (undefined as T) : JSON.parse(text) as T;
   }
+}
+
+function parseHubSpotErrorMetadata(body: string, retryAfter: string | null): HubSpotErrorMetadata {
+  const retryAfterMs = parseRetryAfter(retryAfter);
+  const metadata: HubSpotErrorMetadata = {
+    codes: [],
+    messages: [],
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+  };
+
+  if (body.length === 0) {
+    return metadata;
+  }
+
+  try {
+    const error = JSON.parse(body) as {
+      category?: unknown;
+      message?: unknown;
+      correlationId?: unknown;
+      errors?: Array<{ code?: unknown; message?: unknown }>;
+    };
+    if (typeof error.category === 'string') {
+      metadata.category = sanitizeHubSpotDiagnostic(error.category);
+    }
+    if (typeof error.correlationId === 'string') {
+      metadata.correlationId = sanitizeHubSpotDiagnostic(error.correlationId);
+    }
+    if (typeof error.message === 'string') {
+      metadata.messages.push(sanitizeHubSpotDiagnostic(error.message));
+    }
+    for (const item of error.errors ?? []) {
+      if (typeof item.code === 'string') {
+        metadata.codes.push(sanitizeHubSpotDiagnostic(item.code));
+      }
+      if (typeof item.message === 'string') {
+        metadata.messages.push(sanitizeHubSpotDiagnostic(item.message));
+      }
+    }
+  } catch {
+    metadata.messages.push('HubSpot returned a non-JSON error response.');
+  }
+
+  metadata.codes = [...new Set(metadata.codes)].slice(0, 5);
+  metadata.messages = [...new Set(metadata.messages)].slice(0, 3);
+  return metadata;
+}
+
+function parseRetryAfter(value: string | null): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.round(seconds * 1_000);
+  }
+
+  const millisecondsUntilDate = Date.parse(value) - Date.now();
+  return Number.isFinite(millisecondsUntilDate) && millisecondsUntilDate >= 0
+    ? millisecondsUntilDate
+    : undefined;
+}
+
+function sanitizeHubSpotDiagnostic(value: string): string {
+  return value
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\bBearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [redacted]')
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[redacted-email]')
+    .slice(0, 500);
+}
+
+function formatHubSpotErrorMessage(status: number, metadata: HubSpotErrorMetadata): string {
+  const context = [
+    metadata.category,
+    metadata.correlationId ? `correlationId=${metadata.correlationId}` : undefined,
+    ...metadata.codes,
+    ...metadata.messages,
+  ].filter((value): value is string => Boolean(value));
+  return `HubSpot request failed with status ${status}.${context.length > 0 ? ` ${context.join('; ')}` : ''}`;
 }
 
 function contactProperties(input: HubSpotContactInput): Record<string, string> {

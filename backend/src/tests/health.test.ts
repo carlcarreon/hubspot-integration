@@ -13,6 +13,9 @@ const environment: Environment = {
   WEBHOOK_SIGNING_SECRET: 'test-webhook-signing-secret',
   WORKER_POLL_INTERVAL_MS: 1_000,
   WORKER_LEASE_SECONDS: 300,
+  WORKER_MAX_ATTEMPTS: 8,
+  WORKER_RETRY_BASE_DELAY_MS: 1_000,
+  WORKER_RETRY_MAX_DELAY_MS: 60_000,
 };
 
 const unusedOrderRepository: OrderRepository = {

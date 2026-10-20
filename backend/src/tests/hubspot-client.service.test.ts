@@ -1,5 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
-import { HubSpotHttpClient } from '../services/hubspot-client.service.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { HubSpotApiError, HubSpotHttpClient } from '../services/hubspot-client.service.js';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('HubSpotHttpClient property verification', () => {
   it('creates and verifies the unique external_order_id deal property when missing', async () => {
@@ -62,5 +66,64 @@ describe('HubSpotHttpClient property verification', () => {
         dealstage: 'stage-1',
       },
     });
+  });
+
+  it('retains a sanitized 429 response and Retry-After metadata', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      category: 'RATE_LIMITED',
+      message: 'Too many requests for maria.santos@example.com.',
+      correlationId: 'correlation-429',
+      errors: [{ code: 'RATE_LIMITED', message: 'Try again later.' }],
+    }, { status: 429, headers: { 'Retry-After': '7' } }));
+    const client = new HubSpotHttpClient('private-token-must-not-appear', fetchImplementation);
+
+    const error = await client.findContactByEmail('maria.santos@example.com').catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(HubSpotApiError);
+    expect(error).toMatchObject({
+      status: 429,
+      retryable: true,
+      metadata: {
+        category: 'RATE_LIMITED',
+        correlationId: 'correlation-429',
+        retryAfterMs: 7_000,
+        codes: ['RATE_LIMITED'],
+      },
+    });
+    expect((error as Error).message).not.toContain('maria.santos@example.com');
+    expect((error as Error).message).not.toContain('private-token-must-not-appear');
+  });
+
+  it.each([500, 503])('classifies HTTP %i as retryable', async (status) => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      category: 'SERVER_ERROR',
+      correlationId: `correlation-${status}`,
+    }, { status }));
+    const client = new HubSpotHttpClient('test-token', fetchImplementation);
+
+    const error = await client.findDealByExternalOrderId('ORD-10482').catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(HubSpotApiError);
+    expect((error as HubSpotApiError).retryable).toBe(true);
+  });
+
+  it('classifies HTTP 400 validation failures as permanent and safely exposes their correlation ID', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      category: 'VALIDATION_ERROR',
+      message: 'Property "deal_currency_code" does not exist',
+      correlationId: 'correlation-400',
+      errors: [{ code: 'PROPERTY_DOESNT_EXIST', message: 'Property does not exist' }],
+    }, { status: 400 }));
+    const client = new HubSpotHttpClient('test-token', fetchImplementation);
+
+    const error = await client.findDealByExternalOrderId('ORD-10482').catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(HubSpotApiError);
+    expect((error as HubSpotApiError).retryable).toBe(false);
+    expect((error as Error).message).toContain('correlationId=correlation-400');
+    expect((error as Error).message).toContain('PROPERTY_DOESNT_EXIST');
   });
 });

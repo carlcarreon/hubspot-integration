@@ -8,7 +8,7 @@ const environment = loadEnvironment();
 const app = createApp(
   {
     healthRepository: new PrismaHealthRepository(prisma),
-    orderRepository: new PrismaOrderRepository(prisma),
+    orderRepository: new PrismaOrderRepository(prisma, environment.WORKER_MAX_ATTEMPTS),
   },
   environment,
 );

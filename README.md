@@ -1,6 +1,6 @@
 # HubSpot Order Sync
 
-This repository implements Phase 3 of a signed order-webhook integration. It uses an Express/TypeScript API, PostgreSQL, Prisma ORM, a React/Vite/Tailwind dashboard, and reserves Python for the later CSV exporter.
+This repository implements Phase 4 of a signed order-webhook integration. It uses an Express/TypeScript API, PostgreSQL, Prisma ORM, a React/Vite/Tailwind dashboard, and reserves Python for the later CSV exporter.
 
 ## Prerequisites
 
@@ -99,7 +99,7 @@ The backend reads the raw request bytes (up to 100kb), calculates HMAC-SHA256 wi
 
 ## HubSpot synchronization worker
 
-Phase 3 adds the separate worker process. It uses HubSpot's current dated `2026-09` CRM API paths and never exposes the access token to the browser.
+The separate worker uses HubSpot's current dated `2026-09` CRM API paths and never exposes the access token to the browser.
 
 ```bash
 # Terminal 1: API and dashboard
@@ -119,7 +119,56 @@ For each claimed job, the worker:
 
 Deal properties are `external_order_id`, `dealname`, `amount`, `deal_currency_code`, `closedate`, `pipeline`, and `dealstage`. `closedate` is the source `created_at` converted to UTC ISO-8601. HubSpot account currency configuration must allow the source currency (for example, PHP) or the write will be rejected.
 
-If a run is interrupted after a remote create but before local ID persistence, the next run searches by normalized email and the unique external order ID before it ever creates another remote object. If association fails after the Deal ID has been persisted, a later run updates and re-associates that same Deal. Phase 4 adds automatic retry scheduling and expired-lease recovery; this phase marks unhandled worker failures as `FAILED` for inspection.
+If a run is interrupted after a remote create but before local ID persistence, the next run searches by normalized email and the unique external order ID before it ever creates another remote object. If association fails after the Deal ID has been persisted, a later run updates and re-associates that same Deal. Phase 4 schedules transient failures for retry and recovers expired worker leases; permanent failures are retained for inspection.
+
+## Reliability, retries, and failure history
+
+Phase 4 keeps the worker durable across transient HubSpot failures and worker restarts. A `sync_jobs.attempts` value counts **total processing attempts**, including the first run; `WORKER_MAX_ATTEMPTS` defaults to `8`.
+
+- HTTP `429`, `500`, `502`, `503`, `504`, other `5xx` responses, and network failures are retryable. The worker stores the failed attempt, then returns the job to `PENDING` for a later claim.
+- Each retry uses capped exponential backoff with full jitter. HubSpot's `Retry-After` response header is honored when it is longer than the jittered delay, but it is capped at `WORKER_RETRY_MAX_DELAY_MS`.
+- Validation, authentication, authorization, and other non-429 `4xx` responses are permanent. The job and order become `FAILED` immediately; no unchanged request is retried.
+- Every worker claim creates a `sync_attempts` row. It records its attempt number, `PROCESSING`, `SUCCESS`, or `FAILED` state, any IDs already persisted for the Contact/Deal, a sanitized error, and start/completion timestamps. A scheduled retry is a new processing attempt, not a rewrite of history.
+- Jobs left in `PROCESSING` after their lease expires are marked as interrupted attempts and safely reclaimed when processing capacity remains. An expired final attempt becomes permanently `FAILED`. Exact lease matching prevents a stale worker from completing or failing a newer claim.
+
+HubSpot error records retain a sanitized category, error code/message, and correlation ID. Email addresses, bearer values, line breaks, and overlong diagnostics are redacted or bounded; access tokens and full webhook payloads are never logged or stored as errors.
+
+Set retry behavior in your uncommitted `.env`:
+
+```text
+WORKER_MAX_ATTEMPTS=8
+WORKER_RETRY_BASE_DELAY_MS=1000
+WORKER_RETRY_MAX_DELAY_MS=60000
+```
+
+To inspect jobs and attempt history locally, start Prisma Studio:
+
+```bash
+npm run db:studio
+```
+
+Open `SyncJob` for its queue state, retry time, and last error; open `SyncAttempt` for the immutable per-run history. Phase 5 will add API endpoints and a dashboard retry button. Until then, do not edit real HubSpot records or manually alter queue rows merely to replay a job.
+
+### Development-only Phase 4 verification
+
+The opt-in PostgreSQL verification suite exercises the real repository and worker while returning mocked HubSpot HTTP responses. It never sends a request to HubSpot, uses unique `PHASE4-VERIFY-*` rows only, and deletes only those rows after each scenario.
+
+Stop `npm run worker` first, then run:
+
+```bash
+npm run test:phase4:verify
+```
+
+The suite refuses to start if any existing job is `PROCESSING`, preventing it from racing a real worker. It does not reset the database or alter non-verification rows.
+
+| Mocked response | Expected `Order` / `SyncJob` state | Expected `SyncAttempt` history |
+| --- | --- | --- |
+| `429` + `Retry-After: 5` | `PENDING`; `available_at` at least five seconds later | Attempt 1 `FAILED`, sanitized correlation ID, completion timestamp |
+| `500`, then `500` | `PENDING`; second scheduled delay is larger (exponential backoff) | Attempts 1 and 2 both `FAILED` |
+| `503` | `PENDING` with a scheduled retry | Attempt 1 `FAILED`, sanitized correlation ID |
+| Validation `400` | `FAILED`; no `next_retry_at` | Attempt 1 `FAILED` |
+| `503` at configured final attempt | `FAILED`; no `next_retry_at` | Each allowed attempt is retained as `FAILED` |
+| Expired worker lease | `SUCCESS` after recovery; job `COMPLETED` | Interrupted attempt `FAILED`, recovered attempt `SUCCESS`; previously stored Contact/Deal IDs are reused |
 
 ### HubSpot account and property setup
 
@@ -177,4 +226,4 @@ npm run build
 
 ## Current scope
 
-Phase 3 is complete: the API safely accepts durable local work and the separate worker synchronizes a Contact, an idempotent Deal, and their association through HubSpot. Automatic retry scheduling, expired-lease recovery, dashboard operations, and the Python exporter are intentionally deferred to later phases.
+Phase 4 is complete: the API safely accepts durable local work, the separate worker synchronizes an idempotent Contact/Deal association, and transient HubSpot failures are scheduled for durable retry with attempt history and lease recovery. Dashboard operations and the Python exporter are intentionally deferred to later phases.

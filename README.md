@@ -125,6 +125,7 @@ Controllers only adapt HTTP requests and responses. The webhook service parses a
 | 27. Dashboard, last 50 attempts, failed retry | Complete | [dashboard](frontend/src/App.tsx), [protected APIs](backend/src/routes/sync-monitoring.routes.ts), [dashboard tests](frontend/src/App.test.tsx) |
 | 28. Python Deal CSV export | Complete | [standalone exporter](scripts/export_deals.py), [Python tests](scripts/tests/test_export_deals.py), [protected server bridge](backend/src/services/deal-csv-export.service.ts) |
 | 29. Setup, architecture, assumptions, improvements | Complete | This README, [GOAL checklist](GOAL.md), [Compose configuration](docker-compose.yml) |
+| Bonus. Independent n8n workflow and error workflow | Complete; runtime-verified and sanitized for re-import | [workflow guide](n8n/README.md), [main workflow](n8n/order-to-hubspot.json), [error workflow](n8n/error-notification.json) |
 
 ## Secure order webhooks
 
@@ -394,6 +395,30 @@ npm run test:phase4:verify
 - Dashboard and CSV endpoints fail closed without `DASHBOARD_API_TOKEN`. The local Vite or optional Compose proxy attaches that distinct token server-side; `HUBSPOT_ACCESS_TOKEN` is never a `VITE_*` variable or browser value.
 - The Python exporter uses the standard library, direct read-only Deal Search API calls, UTC-aware rolling date filters, cursor pagination, and source decimal strings to avoid floating-point rounding.
 
+## Optional n8n bonus workflow
+
+An independent, importable n8n alternative is available in [`n8n/`](n8n/).
+It receives the assessment payload directly rather than calling Express, enables
+Webhook Raw Body, calculates HMAC-SHA256 from its binary raw-body input with a
+stored Crypto credential, performs a length-checked `crypto.timingSafeEqual`,
+then searches/upserts the Contact and the uniquely keyed Deal before creating a
+default association. A separate Error Trigger workflow sanitizes execution
+metadata before notifying an operator through configured SMTP.
+
+Both Deal write nodes use the verified HubSpot internal values `pipeline:
+default` and `dealstage: appointmentscheduled`.
+
+The workflow JSON deliberately contains no credentials, tokens, production
+email addresses, HubSpot test data, credential IDs, instance metadata, saved
+workflow IDs, or execution data. It was imported and runtime-verified in a
+local n8n instance: invalid HMAC returned `401`, a valid HMAC with invalid
+payload returned `400`, a valid order created/associated a Deal and returned
+`200`, a sequential replay returned the same Deal ID, and an automatic failure
+sent the SMTP alert. See [the n8n guide](n8n/README.md) for exact re-import
+steps, credential binding, required Error Workflow reselection,
+`NODE_FUNCTION_ALLOW_BUILTIN=crypto` for self-hosting, raw-byte fidelity,
+execution-data privacy, and the concurrent-delivery limitation.
+
 ## Assumptions and limitations
 
 - The store and HubSpot portal are configured for a single currency/pipeline/stage mapping. HubSpot must have the source currency enabled, and any portal-required Deal fields must be supplied/configured.
@@ -401,10 +426,14 @@ npm run test:phase4:verify
 - The local dashboard bearer-token proxy is suitable only for demonstration. Production needs SSO/RBAC, HTTPS, a secret manager, and a trusted reverse proxy.
 - Attempt history introduced after older jobs may have gaps. The dashboard reports only persisted immutable attempts and deliberately does not manufacture legacy failures.
 - The PostgreSQL queue is appropriate for this take-home scale. Higher throughput would warrant a dedicated queue, metrics/tracing, alerting, and a dead-letter/reconciliation process.
-- No n8n workflow is included; it is optional bonus work and was intentionally not implemented.
+- The optional n8n workflow is an independently deployable demonstration, not
+  a replacement for the durable Express/PostgreSQL worker. Its sequential
+  lookup/upsert approach can race under simultaneous first delivery; retain the
+  application workflow for production-grade retry, leasing, attempt history,
+  and concurrent idempotency.
 
 ## Submission readiness
 
-Phase 7 is complete: the API safely accepts durable local work, the separate worker synchronizes an idempotent Contact/Deal association, transient HubSpot failures are scheduled for durable retry with attempt history and lease recovery, the protected React dashboard monitors/requeues failed orders and downloads a server-side CSV export, and the standalone Python exporter writes a rolling UTC Deal CSV. Docker Compose supports both database-only local development and an optional full-stack review profile.
+Phase 7 is complete: the API safely accepts durable local work, the separate worker synchronizes an idempotent Contact/Deal association, transient HubSpot failures are scheduled for durable retry with attempt history and lease recovery, the protected React dashboard monitors/requeues failed orders and downloads a server-side CSV export, and the standalone Python exporter writes a rolling UTC Deal CSV. Docker Compose supports both database-only local development and an optional full-stack review profile. The independent n8n bonus has also been runtime-verified and its committed exports were sanitized for safe re-import.
 
 Before publishing, rerun the checks above with the worker stopped for database-writing integration tests, inspect the staged diff for secrets, and confirm the GitHub repository visibility/permissions. Missing HubSpot credentials would block only a real-account demonstration; mocked automated tests remain credential-free.

@@ -1,0 +1,82 @@
+{
+  "name": "Optima Solutions - Order to HubSpot Error Notification",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a3a2de05-3304-4f3e-9de6-f6b3c3d0ad0d",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const value = (input, fallback = '') => typeof input === 'string' ? input : fallback;\nconst redact = (input) => value(input, 'Workflow execution failed.')\n  .replace(/Bearer\\s+[^\\s,;]+/gi, 'Bearer [REDACTED]')\n  .replace(/(token|secret|authorization|cookie)=?[^\\s,;]+/gi, '$1=[REDACTED]')\n  .replace(/https?:\\/\\/[^\\s]+/gi, '[URL REDACTED]')\n  .slice(0, 500);\n\nconst execution = $json.execution ?? {};\nconst trigger = $json.trigger ?? {};\nconst workflow = $json.workflow ?? {};\nconst error = execution.error ?? trigger.error ?? {};\nconst cause = error.cause ?? {};\n\nreturn {\n  json: {\n    alert: 'n8n order-to-HubSpot workflow failed',\n    workflowId: value(workflow.id, 'unknown'),\n    workflowName: value(workflow.name, 'unknown'),\n    executionId: value(execution.id, 'not-saved'),\n    lastNode: value(execution.lastNodeExecuted, value(error.node?.name, 'unknown')),\n    mode: value(execution.mode, value(trigger.mode, 'unknown')),\n    errorMessage: redact(value(error.message, value(cause.message)))\n  }\n};"
+      },
+      "id": "ebcb1cfa-bbd5-42e7-a9ed-b1489578c743",
+      "name": "Sanitize Failure Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "n8n@example.invalid",
+        "toEmail": "ops@example.invalid",
+        "subject": "={{ '[n8n] HubSpot order workflow failed: ' + $json.workflowName }}",
+        "emailFormat": "text",
+        "text": "={{ 'Workflow: ' + $json.workflowName + ' (' + $json.workflowId + ')\\nExecution: ' + $json.executionId + '\\nLast node: ' + $json.lastNode + '\\nMode: ' + $json.mode + '\\nError: ' + $json.errorMessage }}",
+        "options": {}
+      },
+      "id": "697288a1-6f05-4f6a-9cc1-de1f4837318a",
+      "name": "Notify Operator by Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        480,
+        0
+      ],
+      "credentials": {
+        "smtp": {
+          "name": "Optima Operations SMTP"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Sanitize Failure Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanitize Failure Alert": {
+      "main": [
+        [
+          {
+            "node": "Notify Operator by Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

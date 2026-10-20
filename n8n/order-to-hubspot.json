@@ -1,0 +1,757 @@
+{
+  "name": "Optima Solutions - Order Created to HubSpot",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "optima-orders/order-created",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "951dbf1a-2d52-4788-b2e8-221328e6772a",
+      "name": "Order Created Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        384,
+        144
+      ],
+      "alwaysOutputData": false,
+      "executeOnce": false
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "binaryData": true,
+        "dataPropertyName": "computedHmac"
+      },
+      "id": "ab77ef8f-972a-4394-b48a-d7b63c58ce6b",
+      "name": "HMAC SHA-256 Raw Body",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 2,
+      "position": [
+        624,
+        144
+      ],
+      "credentials": {
+        "crypto": {
+          "name": "Webhook HMAC Secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const { timingSafeEqual } = require('crypto');\n\nconst headerValue = $json.headers?.['x-webhook-signature'] ?? $json.headers?.['X-Webhook-Signature'];\nconst match = typeof headerValue === 'string' ? /^sha256=([a-f0-9]{64})$/i.exec(headerValue) : null;\nconst computed = typeof $json.computedHmac === 'string' ? $json.computedHmac : '';\n\nlet signatureValid = false;\nif (match && /^[a-f0-9]{64}$/i.test(computed)) {\n  const supplied = Buffer.from(match[1], 'hex');\n  const expected = Buffer.from(computed, 'hex');\n  signatureValid = supplied.length === expected.length && timingSafeEqual(supplied, expected);\n}\n\nreturn { json: { ...$json, signatureValid } };"
+      },
+      "id": "c6e49360-fc2d-464b-8813-fd70aff2b66c",
+      "name": "Timing-Safe Signature Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ae3f8c05-9d60-41d9-917a-bd19e9e8a98e",
+              "leftValue": "={{ $json.signatureValid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5ed43ba6-fab5-4ff3-bfcc-6ce1c6f68dbd",
+      "name": "Signature Is Valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1104,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return { json: { code: 'INVALID_SIGNATURE', message: 'Webhook signature is missing, malformed, or invalid.' } };"
+      },
+      "id": "4479584c-9cc5-4723-a5a0-39008cd50d48",
+      "name": "Prepare Unauthorized Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.code, message: $json.message } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "36c46628-11cd-4688-b188-639985e78fb9",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1584,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const body = $json.body;\nconst errors = [];\nconst isObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);\nconst isNonEmptyString = (value, max = 255) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;\nconst isOffsetAwareIsoDate = (value) => typeof value === 'string' && /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$/.test(value) && !Number.isNaN(Date.parse(value));\n\nif (!isObject(body)) errors.push('body must be a JSON object');\nif (body?.event !== 'order.created') errors.push('event must be order.created');\nif (!isNonEmptyString(body?.order_id, 128)) errors.push('order_id is required');\nif (!isOffsetAwareIsoDate(body?.created_at)) errors.push('created_at must be an offset-aware ISO-8601 timestamp');\nif (!isObject(body?.customer)) errors.push('customer is required');\nif (!isNonEmptyString(body?.customer?.email, 320) || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(body?.customer?.email)) errors.push('customer.email must be valid');\nif (!isNonEmptyString(body?.customer?.first_name, 100)) errors.push('customer.first_name is required');\nif (!isNonEmptyString(body?.customer?.last_name, 100)) errors.push('customer.last_name is required');\nif (!isNonEmptyString(body?.customer?.phone, 50)) errors.push('customer.phone is required');\nif (!Array.isArray(body?.items) || body.items.length === 0 || body.items.length > 1000) errors.push('items must contain 1 to 1000 entries');\nfor (const [index, item] of (Array.isArray(body?.items) ? body.items : []).entries()) {\n  if (!isObject(item) || !isNonEmptyString(item.sku, 128) || !isNonEmptyString(item.name, 255) || !Number.isInteger(item.qty) || item.qty <= 0 || !Number.isFinite(item.price) || item.price < 0) errors.push(`items[${index}] is invalid`);\n}\nif (typeof body?.currency !== 'string' || !/^[A-Z]{3}$/.test(body.currency)) errors.push('currency must be a three-letter uppercase code');\nif (!Number.isFinite(body?.total) || body.total < 0) errors.push('total must be a non-negative number');\n\nif (errors.length > 0) return { json: { valid: false, validationError: errors.join('; ') } };\n\nreturn {\n  json: {\n    valid: true,\n    order: {\n      event: body.event,\n      order_id: body.order_id.trim(),\n      created_at: body.created_at,\n      customer: {\n        email: body.customer.email.trim().toLowerCase(),\n        first_name: body.customer.first_name.trim(),\n        last_name: body.customer.last_name.trim(),\n        phone: body.customer.phone.trim()\n      },\n      items: body.items,\n      currency: body.currency,\n      total: body.total\n    }\n  }\n};"
+      },
+      "id": "c6338a14-b236-4e01-aab4-0fc4be10e058",
+      "name": "Validate Order Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9e7f0b50-e81f-45fe-9ad3-a21504310a22",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "354445c4-5271-4985-884e-c36e5499ec3a",
+      "name": "Payload Is Valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1584,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return { json: { code: 'INVALID_PAYLOAD', message: 'Webhook body does not match the order.created contract.' } };"
+      },
+      "id": "bda51f84-b051-46f7-8527-c617613a9356",
+      "name": "Prepare Invalid Payload Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1824,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.code, message: $json.message } }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "419a1ba1-4b1d-4af7-bad7-81e9136b7d00",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2064,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/objects/2026-09/contacts/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { filterGroups: [{ filters: [{ propertyName: 'email', operator: 'EQ', value: $json.order.customer.email }] }], properties: ['email', 'firstname', 'lastname', 'phone'], limit: 1 } }}",
+        "options": {}
+      },
+      "id": "9c20d8dc-3a67-4f97-9ff2-b25e2928f2e4",
+      "name": "Search Contact by Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1824,
+        64
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "name": "HubSpot Private App Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "90589560-a552-4df9-81f9-29c0cf9b8c0e",
+              "leftValue": "={{ Array.isArray($json.results) && $json.results.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4c499021-e7ac-4ca1-9e1a-0cd681d03329",
+      "name": "Contact Exists",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2064,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://api.hubapi.com/crm/objects/2026-09/contacts/' + encodeURIComponent($json.results[0].id) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { properties: { email: $('Validate Order Payload').item.json.order.customer.email, firstname: $('Validate Order Payload').item.json.order.customer.first_name, lastname: $('Validate Order Payload').item.json.order.customer.last_name, phone: $('Validate Order Payload').item.json.order.customer.phone } } }}",
+        "options": {}
+      },
+      "id": "1a767cbb-e861-4d5c-807f-1b501de2d0bb",
+      "name": "Update Contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2304,
+        -16
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "name": "HubSpot Private App Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/objects/2026-09/contacts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { properties: { email: $('Validate Order Payload').item.json.order.customer.email, firstname: $('Validate Order Payload').item.json.order.customer.first_name, lastname: $('Validate Order Payload').item.json.order.customer.last_name, phone: $('Validate Order Payload').item.json.order.customer.phone } } }}",
+        "options": {}
+      },
+      "id": "bfba46d2-b108-4b3b-91ed-05e55673ecb7",
+      "name": "Create Contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2304,
+        144
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "name": "HubSpot Private App Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "if (typeof $json.id !== 'string' || $json.id.length === 0) throw new Error('HubSpot Contact response did not include an ID.');\nreturn { json: { order: $('Validate Order Payload').item.json.order, contactId: $json.id } };"
+      },
+      "id": "0ac04fa1-cea4-4346-bd5f-ac5fb6ca279c",
+      "name": "Store Contact Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2544,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/objects/2026-09/deals/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { filterGroups: [{ filters: [{ propertyName: 'external_order_id', operator: 'EQ', value: $json.order.order_id }] }], properties: ['external_order_id', 'dealname'], limit: 1 } }}",
+        "options": {}
+      },
+      "id": "18ddeed4-58bd-4714-ad65-c5e22d8bd45c",
+      "name": "Search Deal by External Order ID",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2784,
+        64
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "name": "HubSpot Private App Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e7c3a2a4-2d3b-412e-b893-e179a3bdb5bf",
+              "leftValue": "={{ Array.isArray($json.results) && $json.results.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a19bce5c-fa24-4668-a5cd-ed291acaa98f",
+      "name": "Deal Exists",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3024,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://api.hubapi.com/crm/objects/2026-09/deals/' + encodeURIComponent($json.results[0].id) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { properties: { external_order_id: $('Store Contact Context').item.json.order.order_id, dealname: 'Order ' + $('Store Contact Context').item.json.order.order_id + ' - ' + $('Store Contact Context').item.json.order.customer.first_name + ' ' + $('Store Contact Context').item.json.order.customer.last_name, amount: Number($('Store Contact Context').item.json.order.total).toFixed(2), deal_currency_code: $('Store Contact Context').item.json.order.currency, closedate: new Date($('Store Contact Context').item.json.order.created_at).toISOString(), pipeline: 'default', dealstage: 'appointmentscheduled' } } }}",
+        "options": {}
+      },
+      "id": "ec07ff14-1fe9-4ec2-a851-de93593cc600",
+      "name": "Update Deal",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        3264,
+        -16
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "name": "HubSpot Private App Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/objects/2026-09/deals",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { properties: { external_order_id: $('Store Contact Context').item.json.order.order_id, dealname: 'Order ' + $('Store Contact Context').item.json.order.order_id + ' - ' + $('Store Contact Context').item.json.order.customer.first_name + ' ' + $('Store Contact Context').item.json.order.customer.last_name, amount: Number($('Store Contact Context').item.json.order.total).toFixed(2), deal_currency_code: $('Store Contact Context').item.json.order.currency, closedate: new Date($('Store Contact Context').item.json.order.created_at).toISOString(), pipeline: 'default', dealstage: 'appointmentscheduled' } } }}",
+        "options": {}
+      },
+      "id": "0f94ef63-0605-4b4a-bbfe-8f735137ba77",
+      "name": "Create Deal",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        3264,
+        144
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "name": "HubSpot Private App Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "if (typeof $json.id !== 'string' || $json.id.length === 0) throw new Error('HubSpot Deal response did not include an ID.');\nreturn { json: { orderId: $('Store Contact Context').item.json.order.order_id, contactId: $('Store Contact Context').item.json.contactId, dealId: $json.id } };"
+      },
+      "id": "c1409af5-6f93-4911-8342-f62288e4d954",
+      "name": "Store Deal Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3504,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ 'https://api.hubapi.com/crm/objects/2026-09/deals/' + encodeURIComponent($json.dealId) + '/associations/default/contacts/' + encodeURIComponent($json.contactId) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "options": {}
+      },
+      "id": "03780f12-9a4a-47b4-a190-f089931f45c7",
+      "name": "Associate Deal with Contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        3744,
+        64
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "name": "HubSpot Private App Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const context = $('Store Deal Context').item.json;\nreturn { json: { orderId: context.orderId, contactId: context.contactId, dealId: context.dealId, status: 'synchronized' } };"
+      },
+      "id": "b7c45154-c110-4d62-990b-373de64c4569",
+      "name": "Prepare Accepted Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3984,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { data: $json } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "83f31df3-5a4c-43fe-a640-9cab7d35ec45",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        4224,
+        64
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Order Created Webhook": {
+      "main": [
+        [
+          {
+            "node": "HMAC SHA-256 Raw Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HMAC SHA-256 Raw Body": {
+      "main": [
+        [
+          {
+            "node": "Timing-Safe Signature Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Timing-Safe Signature Check": {
+      "main": [
+        [
+          {
+            "node": "Signature Is Valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature Is Valid": {
+      "main": [
+        [
+          {
+            "node": "Validate Order Payload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Unauthorized Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Unauthorized Response": {
+      "main": [
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Order Payload": {
+      "main": [
+        [
+          {
+            "node": "Payload Is Valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Payload Is Valid": {
+      "main": [
+        [
+          {
+            "node": "Search Contact by Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Invalid Payload Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Invalid Payload Response": {
+      "main": [
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Contact by Email": {
+      "main": [
+        [
+          {
+            "node": "Contact Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contact Exists": {
+      "main": [
+        [
+          {
+            "node": "Update Contact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Contact": {
+      "main": [
+        [
+          {
+            "node": "Store Contact Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Contact": {
+      "main": [
+        [
+          {
+            "node": "Store Contact Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Contact Context": {
+      "main": [
+        [
+          {
+            "node": "Search Deal by External Order ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Deal by External Order ID": {
+      "main": [
+        [
+          {
+            "node": "Deal Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deal Exists": {
+      "main": [
+        [
+          {
+            "node": "Update Deal",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Deal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Deal": {
+      "main": [
+        [
+          {
+            "node": "Store Deal Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Deal": {
+      "main": [
+        [
+          {
+            "node": "Store Deal Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Deal Context": {
+      "main": [
+        [
+          {
+            "node": "Associate Deal with Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Associate Deal with Contact": {
+      "main": [
+        [
+          {
+            "node": "Prepare Accepted Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Accepted Response": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

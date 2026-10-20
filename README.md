@@ -1,6 +1,6 @@
 # HubSpot Order Sync
 
-This repository implements Phase 6 of a signed order-webhook integration. It uses an Express/TypeScript API, PostgreSQL, Prisma ORM, a React/Vite/Tailwind sync-monitoring dashboard, and a standalone Python accounting exporter.
+This repository is submission-ready for the signed order-webhook integration take-home assessment. It uses an Express/TypeScript API, PostgreSQL, Prisma ORM, a React/Vite/Tailwind sync-monitoring dashboard, and a standalone Python accounting exporter.
 
 ## Prerequisites
 
@@ -41,6 +41,24 @@ To remove the local PostgreSQL volume as well (this deletes local development da
 docker compose down -v
 ```
 
+## Optional full-stack Docker Compose demo
+
+The default Compose command intentionally starts **only PostgreSQL** and remains the recommended local-development workflow. For a self-contained review/demo stack, first create a real uncommitted `.env` from `.env.example`, replace every placeholder used by HubSpot, then run:
+
+```bash
+docker compose --profile full up --build
+```
+
+This profile waits for PostgreSQL, applies committed Prisma migrations once, starts the API, starts the durable worker, and serves the built dashboard at `http://localhost:5173`. The backend image includes Python 3 for the protected dashboard CSV bridge. The frontend Nginx proxy injects the local `DASHBOARD_API_TOKEN` into `/api` requests inside the container; it is never shipped in the browser bundle. Webhook deliveries can use `http://localhost:5173/api/webhooks/orders` in this mode.
+
+Stop the demo without deleting PostgreSQL data:
+
+```bash
+docker compose --profile full down
+```
+
+Do not use the Compose profile as a production authentication design: deploy the API/dashboard behind SSO or an authenticated reverse proxy, supply secrets through a secret manager, and use a non-development PostgreSQL credential.
+
 ## Database commands
 
 ```bash
@@ -60,6 +78,18 @@ npm run db:studio
 The provided `DATABASE_URL` targets Docker Compose PostgreSQL. For another PostgreSQL server, use a standard URL such as `postgresql://USER:PASSWORD@HOST:5432/DATABASE?schema=public`; URL-encode special characters in credentials.
 
 ## Architecture
+
+```mermaid
+flowchart LR
+    Store[Store / mock sender] -->|HMAC-signed order.created| API[Express API]
+    API --> DB[(PostgreSQL)]
+    DB --> Worker[Durable worker]
+    Worker --> HubSpot[HubSpot Contacts + Deals]
+    Worker --> DB
+    Dashboard[React dashboard] -->|Protected API| API
+    API --> Python[Python CSV exporter]
+    Python --> HubSpot
+```
 
 ```text
 backend/src/
@@ -82,6 +112,19 @@ scripts/         Python CSV exporter, Python tests, and webhook sender
 The initial migration creates `orders`, `sync_attempts`, and `sync_jobs`. A signed webhook transactionally creates its `Order` and exactly one pending `SyncJob` in one Prisma nested write. PostgreSQL's unique `orders.order_id` constraint handles concurrent duplicate deliveries: the winner creates the order/job pair, and every losing request reads and returns that existing order. The separate worker conditionally updates a pending row to `PROCESSING`, so concurrent worker processes cannot claim the same job.
 
 Controllers only adapt HTTP requests and responses. The webhook service parses and validates the payload before delegating persistence; the repository is the only layer that performs Prisma database operations.
+
+## Requirements traceability
+
+| Assessment requirement | Status | Evidence |
+| --- | --- | --- |
+| 22. Signed, validated Node/TypeScript webhook | Complete | [webhook signature middleware](backend/src/middleware/webhook-signature.ts), [HMAC service](backend/src/services/webhook-signature.service.ts), [Zod validator](backend/src/validators/order-webhook.validator.ts), [PostgreSQL integration tests](backend/src/tests/webhook.integration.test.ts) |
+| 23. Contact/Deal sync and association | Complete | [sync service](backend/src/services/hubspot-sync.service.ts), [HubSpot client](backend/src/services/hubspot-client.service.ts), [mapping tests](backend/src/tests/hubspot-sync.service.test.ts) |
+| 24. Order idempotency | Complete | [unique Prisma model](backend/prisma/schema.prisma), [atomic order repository](backend/src/repositories/order.repository.ts), [webhook duplicate tests](backend/src/tests/webhook.integration.test.ts) |
+| 25. Retry, backoff, and failure logging | Complete | [retry policy](backend/src/jobs/retry-policy.ts), [lease-aware job repository](backend/src/repositories/sync-job.repository.ts), [worker tests](backend/src/tests/sync-job-worker.test.ts), [PostgreSQL verification](backend/src/tests/phase4.database-verification.test.ts) |
+| 26. Database-backed sync attempts | Complete | [Prisma models/migration](backend/prisma/schema.prisma), [attempt history repository](backend/src/repositories/sync-monitoring.repository.ts) |
+| 27. Dashboard, last 50 attempts, failed retry | Complete | [dashboard](frontend/src/App.tsx), [protected APIs](backend/src/routes/sync-monitoring.routes.ts), [dashboard tests](frontend/src/App.test.tsx) |
+| 28. Python Deal CSV export | Complete | [standalone exporter](scripts/export_deals.py), [Python tests](scripts/tests/test_export_deals.py), [protected server bridge](backend/src/services/deal-csv-export.service.ts) |
+| 29. Setup, architecture, assumptions, improvements | Complete | This README, [GOAL checklist](GOAL.md), [Compose configuration](docker-compose.yml) |
 
 ## Secure order webhooks
 
@@ -148,7 +191,7 @@ To inspect jobs and attempt history locally, start Prisma Studio:
 npm run db:studio
 ```
 
-Open `SyncJob` for its queue state, retry time, and last error; open `SyncAttempt` for the immutable per-run history. Phase 5 will add API endpoints and a dashboard retry button. Until then, do not edit real HubSpot records or manually alter queue rows merely to replay a job.
+Open `SyncJob` for its queue state, retry time, and last error; open `SyncAttempt` for immutable per-run history. The dashboard provides the supported manual-retry path; do not edit real HubSpot records or manually alter queue rows merely to replay a job.
 
 ### Development-only Phase 4 verification
 
@@ -210,6 +253,8 @@ npm run webhook:send -- http://localhost:3000/api/webhooks/orders
 ```
 
 The sender generates a fresh demo order ID, signs the precise JSON body with the same `sha256=<hex>` convention, and exits nonzero for a non-2xx response. It never prints the signing secret.
+
+The generated order retains the assessment contract: `event: "order.created"`, a string `order_id`, offset-aware ISO `created_at`, a customer with email/name/phone, one or more `{ sku, name, qty, price }` items, uppercase ISO currency, and numeric total. Its ID and timestamp are deliberately fresh so the worker can create a current Deal and the seven-day exporter can demonstrate a matching record; the field names and example customer/item values match the supplied payload.
 
 ## Environment
 
@@ -325,6 +370,41 @@ python3.11 -m unittest discover -s scripts/tests -t . -v
 
 `npm test` includes PostgreSQL integration coverage for valid, invalid, unsigned, tampered, duplicate, and concurrent webhook deliveries. It also has mock-based tests for contact/deal mapping, update-vs-create behavior, Deal recovery by `external_order_id`, association, property verification, dashboard API authentication/response structure/retry conflict behavior, CSV-export authentication/validation/attachment/failure/timeout behavior, Python subprocess cleanup/concurrency behavior, and React dashboard loading/retry/download interactions. It makes no real HubSpot requests.
 
-## Current scope
+Run the opt-in real-PostgreSQL/mock-HubSpot reliability suite only after stopping the worker:
 
-Phase 6 is complete: the API safely accepts durable local work, the separate worker synchronizes an idempotent Contact/Deal association, transient HubSpot failures are scheduled for durable retry with attempt history and lease recovery, the protected React dashboard monitors/requeues failed orders and downloads a server-side CSV export, and the standalone Python exporter writes a rolling UTC Deal CSV. Phase 7 submission work remains deferred.
+```bash
+npm run test:phase4:verify
+```
+
+## Demo walkthrough
+
+1. Create `.env` from `.env.example`, configure the HubSpot private-app token, pipeline/stage IDs, webhook secret, and dashboard token.
+2. Start PostgreSQL and apply migrations, then run `npm run dev` and `npm run worker` in a separate terminal.
+3. Run `npm run webhook:send`. It returns `202`; the worker creates or updates the Contact, reconciles/creates the uniquely keyed Deal, associates them, and records the result.
+4. Open `http://localhost:5173`, refresh the Orders view, expand the attempt button, and inspect stored attempt/error details. Use the Attempts view for the newest 50 real records.
+5. For a terminal failed order, use **Retry**. The API atomically requeues it and the normal worker processes it; no payload, historical attempt, or known HubSpot ID is discarded.
+6. Use **Export Deals (Last 7 Days)** to download a CSV, or independently run `python3.11 scripts/export_deals.py`.
+
+## Security and architecture decisions
+
+- Webhooks are verified against their raw bytes before JSON parsing with a length-checked constant-time HMAC comparison. PostgreSQL’s unique `order_id` and the unique HubSpot `external_order_id` defend both local and remote duplicates.
+- The API acknowledges durable local work and never calls HubSpot synchronously. A separate PostgreSQL-leased worker makes recovery observable and avoids an in-memory queue as the source of truth.
+- Partial Contact/Deal IDs are persisted as soon as they are known. A later run updates/searches them rather than creating a duplicate remote record.
+- Retry is deliberately narrow: rate limiting, `5xx`, and transport failures retry with bounded exponential jitter; ordinary `4xx` validation/authentication failures become inspectable terminal failures.
+- Dashboard and CSV endpoints fail closed without `DASHBOARD_API_TOKEN`. The local Vite or optional Compose proxy attaches that distinct token server-side; `HUBSPOT_ACCESS_TOKEN` is never a `VITE_*` variable or browser value.
+- The Python exporter uses the standard library, direct read-only Deal Search API calls, UTC-aware rolling date filters, cursor pagination, and source decimal strings to avoid floating-point rounding.
+
+## Assumptions and limitations
+
+- The store and HubSpot portal are configured for a single currency/pipeline/stage mapping. HubSpot must have the source currency enabled, and any portal-required Deal fields must be supplied/configured.
+- `created_at` is mapped to Deal `closedate` as the agreed business approximation for this assessment.
+- The local dashboard bearer-token proxy is suitable only for demonstration. Production needs SSO/RBAC, HTTPS, a secret manager, and a trusted reverse proxy.
+- Attempt history introduced after older jobs may have gaps. The dashboard reports only persisted immutable attempts and deliberately does not manufacture legacy failures.
+- The PostgreSQL queue is appropriate for this take-home scale. Higher throughput would warrant a dedicated queue, metrics/tracing, alerting, and a dead-letter/reconciliation process.
+- No n8n workflow is included; it is optional bonus work and was intentionally not implemented.
+
+## Submission readiness
+
+Phase 7 is complete: the API safely accepts durable local work, the separate worker synchronizes an idempotent Contact/Deal association, transient HubSpot failures are scheduled for durable retry with attempt history and lease recovery, the protected React dashboard monitors/requeues failed orders and downloads a server-side CSV export, and the standalone Python exporter writes a rolling UTC Deal CSV. Docker Compose supports both database-only local development and an optional full-stack review profile.
+
+Before publishing, rerun the checks above with the worker stopped for database-writing integration tests, inspect the staged diff for secrets, and confirm the GitHub repository visibility/permissions. Missing HubSpot credentials would block only a real-account demonstration; mocked automated tests remain credential-free.

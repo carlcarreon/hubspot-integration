@@ -323,12 +323,14 @@ The layout is a recommendation. Adjust only when it clearly simplifies implement
 
 ### Phase 7 — Tests, documentation, and submission
 
-- [ ] Add automated tests for mapping, HMAC, idempotency (including concurrency), retries, and partial-failure recovery.
-- [x] Add Docker Compose with a persistent PostgreSQL volume.
-- [ ] If time permits, create n8n workflow JSON for webhook validation/contact/deal sync plus a separate error notification workflow (bonus). Document import, credentials, secrets, and any non-parity limitations.
-- [ ] Write comprehensive `README.md`: prerequisites, installation, env variables, HubSpot setup, run commands, architecture, assumptions, tradeoffs, tests, screenshots or demo steps, and improvements with more time.
-- [ ] Verify gitignore, no secrets, clean lint/build/test output, and reproducible fresh setup.
-- [ ] Provide exact sample commands for sending the signed webhook and exporting CSV.
+- [x] Audit automated coverage for mapping, HMAC, idempotency/concurrency, retry/backoff, leases, dashboard flows, CSV bridge, and partial-failure recovery.
+- [x] Preserve Docker Compose PostgreSQL development and add a profile-gated optional full-stack review configuration with Python support.
+- [x] Document that n8n is unimplemented optional bonus work; do not imply it is part of the submission.
+- [x] Complete README prerequisites, clean-clone setup, environment safety, architecture, API, traceability, demo, assumptions, tradeoffs, limitations, and future improvements.
+- [x] Tighten ignore rules and perform a tracked-file credential/data scan; `.env`, key/certificate files, database backups, virtual environments, and CSV exports are ignored.
+- [x] Document exact commands for the signed mock webhook, standalone CSV export, migrations, tests, lint, builds, and optional full-stack Compose demo.
+- [x] Verify committed migration state, full Node suite (46 backend and 12 frontend tests), Phase 4 PostgreSQL verification (6 scenarios), Python exporter tests (8), lint, production builds, and Compose image builds.
+- [ ] Independently build and exercise the full-stack Compose profile from a clean clone. *(environment/reviewer follow-up)*
 
 **Acceptance:** another developer can clone, configure, run, validate a complete sync, inspect failures, retry, and generate an export by following README alone.
 
@@ -354,7 +356,7 @@ The layout is a recommendation. Adjust only when it clearly simplifies implement
 - [x] Development-only PostgreSQL verification demonstrates retry scheduling, exhaustion, attempt history, and lease recovery
 - [x] Python CSV uses create date, covers entire window, paginates, and includes headers
 - [x] Dashboard CSV download authenticates, validates days, handles subprocess failure/timeout, and never exposes HubSpot credentials
-- [ ] README is executable on fresh clone
+- [ ] README is exercised from a completely clean clone with real reviewer credentials
 
 ## Completion definition
 
@@ -371,10 +373,11 @@ The project is done only when all eight core requirements are implemented, tests
 
 ## Final submission checklist
 
-- [ ] GitHub repository link is available and permissions verified.
-- [ ] `.env.example` and README enable local setup.
-- [ ] TypeScript webhook, HubSpot sync, idempotency, retry, PostgreSQL history, and dashboard fully working.
-- [ ] Python export script fully working.
-- [ ] Tests and Docker Compose included if implemented.
-- [ ] n8n JSONs included if attempted.
-- [ ] No secrets, generated databases, or sensitive customer data committed.
+- [ ] GitHub repository link is available and permissions verified. *(submitter action)*
+- [x] `.env.example` and README document local and optional Compose setup.
+- [x] TypeScript webhook, HubSpot sync, idempotency, retry, PostgreSQL history, and dashboard are implemented and audited.
+- [x] Python export script and protected dashboard bridge are implemented and audited.
+- [x] Tests plus database-only and optional full-stack Docker Compose configurations are included.
+- [x] n8n was intentionally not attempted; it is optional bonus work.
+- [x] Ignore rules and tracked files were reviewed for secrets, generated databases, and exported customer data.
+- [ ] Final staged-file scan, commit, GitHub visibility, and reviewer-access verification are complete. *(submitter action)*

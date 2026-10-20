@@ -15,5 +15,78 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql
 
+  # Optional review/demo stack. It is deliberately profile-gated so the
+  # existing `docker compose up -d postgres` local-development workflow stays
+  # unchanged. Start it with `docker compose --profile full up --build`.
+  migrate:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    working_dir: /app/backend
+    command: ["../node_modules/.bin/prisma", "migrate", "deploy"]
+    environment:
+      DATABASE_URL: postgresql://hubspot:hubspot@postgres:5432/hubspot_order_sync?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  backend:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment: &application_environment
+      NODE_ENV: production
+      API_PORT: 3000
+      DATABASE_URL: postgresql://hubspot:hubspot@postgres:5432/hubspot_order_sync?schema=public
+      FRONTEND_ORIGIN: http://localhost:5173
+      # Empty values let `docker compose up postgres` work without an app .env;
+      # backend validation and worker startup still fail closed in full mode.
+      WEBHOOK_SIGNING_SECRET: ${WEBHOOK_SIGNING_SECRET:-}
+      DASHBOARD_API_TOKEN: ${DASHBOARD_API_TOKEN:-}
+      HUBSPOT_ACCESS_TOKEN: ${HUBSPOT_ACCESS_TOKEN:-}
+      HUBSPOT_PIPELINE_ID: ${HUBSPOT_PIPELINE_ID:-}
+      HUBSPOT_DEAL_STAGE_ID: ${HUBSPOT_DEAL_STAGE_ID:-}
+      PYTHON_EXECUTABLE: python3
+      EXPORT_TIMEOUT_MS: ${EXPORT_TIMEOUT_MS:-90000}
+      EXPORT_MAX_CONCURRENT: ${EXPORT_MAX_CONCURRENT:-1}
+      WORKER_POLL_INTERVAL_MS: ${WORKER_POLL_INTERVAL_MS:-1000}
+      WORKER_LEASE_SECONDS: ${WORKER_LEASE_SECONDS:-300}
+      WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-8}
+      WORKER_RETRY_BASE_DELAY_MS: ${WORKER_RETRY_BASE_DELAY_MS:-1000}
+      WORKER_RETRY_MAX_DELAY_MS: ${WORKER_RETRY_MAX_DELAY_MS:-60000}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    working_dir: /app/backend
+    command: ["node", "dist/jobs/sync-worker.js"]
+    environment: *application_environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "5173:80"
+    environment:
+      BACKEND_URL: http://backend:3000
+      DASHBOARD_API_TOKEN: ${DASHBOARD_API_TOKEN:-}
+      # Restrict template substitution so Nginx variables such as $host remain intact.
+      NGINX_ENVSUBST_FILTER: BACKEND_URL|DASHBOARD_API_TOKEN
+    depends_on:
+      backend:
+        condition: service_started
+
 volumes:
   postgres_data:

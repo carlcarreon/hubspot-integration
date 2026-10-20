@@ -1,0 +1,15 @@
+.git
+.env
+.env.*
+node_modules
+**/node_modules
+dist
+**/dist
+coverage
+exports
+*.csv
+*.dump
+*.backup
+.venv
+__pycache__
+**/__pycache__

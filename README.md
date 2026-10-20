@@ -1,364 +1,212 @@
 # HubSpot Order Sync
 
-This repository is submission-ready for the signed order-webhook integration take-home assessment. It uses an Express/TypeScript API, PostgreSQL, Prisma ORM, a React/Vite/Tailwind sync-monitoring dashboard, and a standalone Python accounting exporter.
+A take-home integration project for Optima Solutions. It receives signed order
+webhooks, creates or updates HubSpot Contacts and Deals, records sync history,
+and provides a monitoring dashboard and CSV export.
 
-## Prerequisites
+## Stack
 
-- Node.js 20.19+, 22.12+, or 24+
-- Python 3.11+ (for the standalone CSV exporter)
-- Docker and Docker Compose (for local PostgreSQL)
-- npm 10+
-
-The project pins Prisma ORM and Prisma Client at `7.10.1`. Prisma 7 uses a `prisma.config.ts` datasource configuration and the PostgreSQL driver adapter at runtime; `DATABASE_URL` is intentionally not stored in `schema.prisma`.
+- Node.js, TypeScript, Express, Zod
+- PostgreSQL, Prisma 7, Docker Compose
+- React, Vite, Tailwind CSS
+- Python 3.11+ CSV exporter
+- Optional n8n workflow bonus
 
 ## Quick start
 
+Requires Node.js 20.19+ (or 22.12+), npm 10+, Docker Compose, and Python
+3.11+ for the CSV exporter.
+
 ```bash
+git clone https://github.com/carlcarreon/hubspot-integration.git
+cd hubspot-integration
 cp .env.example .env
 npm install
 docker compose up -d postgres
 npm run db:migrate:deploy
 npm run db:generate
-npm run dev
 ```
 
-The API listens at `http://localhost:3000`, and Vite serves the dashboard at `http://localhost:5173`. The Vite development server proxies `/api` to the backend.
+Set the required values in the uncommitted `.env`, then start the app:
 
 ```bash
-curl http://localhost:3000/api/health
-# {"status":"ok","database":"up"}
+# Terminal 1: API + dashboard
+npm run dev
+
+# Terminal 2: durable HubSpot worker
+npm run worker
 ```
 
-To stop the database without removing data:
+- Dashboard: `http://localhost:5173`
+- API: `http://localhost:3000`
+- Health check: `curl http://localhost:3000/api/health`
+
+Stop PostgreSQL without deleting data:
 
 ```bash
 docker compose down
 ```
 
-To remove the local PostgreSQL volume as well (this deletes local development data):
+## Optional full-stack Docker demo
 
-```bash
-docker compose down -v
-```
-
-## Optional full-stack Docker Compose demo
-
-The default Compose command intentionally starts **only PostgreSQL** and remains the recommended local-development workflow. For a self-contained review/demo stack, first create a real uncommitted `.env` from `.env.example`, replace every placeholder used by HubSpot, then run:
+With a configured, uncommitted `.env`:
 
 ```bash
 docker compose --profile full up --build
 ```
 
-This profile waits for PostgreSQL, applies committed Prisma migrations once, starts the API, starts the durable worker, and serves the built dashboard at `http://localhost:5173`. The backend image includes Python 3 for the protected dashboard CSV bridge. The frontend Nginx proxy injects the local `DASHBOARD_API_TOKEN` into `/api` requests inside the container; it is never shipped in the browser bundle. Webhook deliveries can use `http://localhost:5173/api/webhooks/orders` in this mode.
+This starts PostgreSQL, migrations, API, worker, and dashboard. It is for local
+review only; production needs HTTPS, SSO/RBAC, and managed secrets.
 
-Stop the demo without deleting PostgreSQL data:
+## Environment
 
-```bash
-docker compose --profile full down
-```
+Copy `.env.example`; never commit `.env`.
 
-Do not use the Compose profile as a production authentication design: deploy the API/dashboard behind SSO or an authenticated reverse proxy, supply secrets through a secret manager, and use a non-development PostgreSQL credential.
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `WEBHOOK_SIGNING_SECRET` | HMAC-SHA256 secret for order webhooks |
+| `HUBSPOT_ACCESS_TOKEN` | Server-only HubSpot private-app token |
+| `HUBSPOT_PIPELINE_ID` | HubSpot Deal pipeline internal ID |
+| `HUBSPOT_DEAL_STAGE_ID` | HubSpot Deal stage internal ID |
+| `DASHBOARD_API_TOKEN` | Dashboard API bearer token |
+| `PYTHON_EXECUTABLE` | Optional Python 3.11+ path for CSV export |
 
-## Database commands
-
-```bash
-# Apply committed migrations (CI, Docker, and production-like environments)
-npm run db:migrate:deploy
-
-# Create a new migration while developing a schema change
-npm run db:migrate:dev -- --name describe_change
-
-# Regenerate the typed Prisma client after schema changes
-npm run db:generate
-
-# Inspect local data
-npm run db:studio
-```
-
-The provided `DATABASE_URL` targets Docker Compose PostgreSQL. For another PostgreSQL server, use a standard URL such as `postgresql://USER:PASSWORD@HOST:5432/DATABASE?schema=public`; URL-encode special characters in credentials.
+The browser never receives `HUBSPOT_ACCESS_TOKEN`.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    Store[Store / mock sender] -->|HMAC-signed order.created| API[Express API]
+    Store[Store / mock sender] -->|Signed webhook| API[Express API]
     API --> DB[(PostgreSQL)]
     DB --> Worker[Durable worker]
-    Worker --> HubSpot[HubSpot Contacts + Deals]
-    Worker --> DB
-    Dashboard[React dashboard] -->|Protected API| API
+    Worker --> HubSpot[Contacts + Deals]
+    Dashboard[React dashboard] --> API
     API --> Python[Python CSV exporter]
     Python --> HubSpot
 ```
 
-```text
-backend/src/
-  routes/        HTTP route registration
-  controllers/   Thin request/response adapters
-  services/      Business use-cases
-  repositories/  PostgreSQL/Prisma data access
-  middleware/    Shared HTTP behavior and safe errors
-  validators/    Zod schemas and safe payload parsing
-  jobs/          Durable HubSpot synchronization worker
-  config/        Validated environment and database client
-  tests/         API tests
-backend/prisma/
-  schema.prisma
-  migrations/
-frontend/        React + Vite + Tailwind dashboard
-scripts/         Python CSV exporter, Python tests, and webhook sender
-```
-
-The initial migration creates `orders`, `sync_attempts`, and `sync_jobs`. A signed webhook transactionally creates its `Order` and exactly one pending `SyncJob` in one Prisma nested write. PostgreSQL's unique `orders.order_id` constraint handles concurrent duplicate deliveries: the winner creates the order/job pair, and every losing request reads and returns that existing order. The separate worker conditionally updates a pending row to `PROCESSING`, so concurrent worker processes cannot claim the same job.
-
-Controllers only adapt HTTP requests and responses. The webhook service parses and validates the payload before delegating persistence; the repository is the only layer that performs Prisma database operations.
-
-## Requirements traceability
-
-| Assessment requirement | Status | Evidence |
-| --- | --- | --- |
-| 22. Signed, validated Node/TypeScript webhook | Complete | [webhook signature middleware](backend/src/middleware/webhook-signature.ts), [HMAC service](backend/src/services/webhook-signature.service.ts), [Zod validator](backend/src/validators/order-webhook.validator.ts), [PostgreSQL integration tests](backend/src/tests/webhook.integration.test.ts) |
-| 23. Contact/Deal sync and association | Complete | [sync service](backend/src/services/hubspot-sync.service.ts), [HubSpot client](backend/src/services/hubspot-client.service.ts), [mapping tests](backend/src/tests/hubspot-sync.service.test.ts) |
-| 24. Order idempotency | Complete | [unique Prisma model](backend/prisma/schema.prisma), [atomic order repository](backend/src/repositories/order.repository.ts), [webhook duplicate tests](backend/src/tests/webhook.integration.test.ts) |
-| 25. Retry, backoff, and failure logging | Complete | [retry policy](backend/src/jobs/retry-policy.ts), [lease-aware job repository](backend/src/repositories/sync-job.repository.ts), [worker tests](backend/src/tests/sync-job-worker.test.ts), [PostgreSQL verification](backend/src/tests/phase4.database-verification.test.ts) |
-| 26. Database-backed sync attempts | Complete | [Prisma models/migration](backend/prisma/schema.prisma), [attempt history repository](backend/src/repositories/sync-monitoring.repository.ts) |
-| 27. Dashboard, last 50 attempts, failed retry | Complete | [dashboard](frontend/src/App.tsx), [protected APIs](backend/src/routes/sync-monitoring.routes.ts), [dashboard tests](frontend/src/App.test.tsx) |
-| 28. Python Deal CSV export | Complete | [standalone exporter](scripts/export_deals.py), [Python tests](scripts/tests/test_export_deals.py), [protected server bridge](backend/src/services/deal-csv-export.service.ts) |
-| 29. Setup, architecture, assumptions, improvements | Complete | This README, [GOAL checklist](GOAL.md), [Compose configuration](docker-compose.yml) |
-| Bonus. Independent n8n workflow and error workflow | Complete; runtime-verified and sanitized for re-import | [workflow guide](n8n/README.md), [main workflow](n8n/order-to-hubspot.json), [error workflow](n8n/error-notification.json) |
-
-## Secure order webhooks
-
-`POST /api/webhooks/orders` accepts only the supplied `order.created` shape. Send the exact JSON bytes with:
+The backend follows a Laravel-inspired structure:
 
 ```text
-X-Webhook-Signature: sha256=<lowercase_hex_hmac_sha256>
+routes/        HTTP routes
+controllers/   Thin request/response handlers
+services/      Business rules and orchestration
+repositories/  Prisma/PostgreSQL access
+middleware/    HMAC, auth, and error handling
+validators/    Zod schemas
+jobs/          Lease-based durable sync worker
 ```
 
-The backend reads the raw request bytes (up to 100kb), calculates HMAC-SHA256 with `WEBHOOK_SIGNING_SECRET`, and performs a length-checked `timingSafeEqual` comparison before parsing JSON or validating it with Zod.
+## How it works
 
-- Missing, malformed, invalid, or tampered signatures return `401` with `INVALID_SIGNATURE`.
-- A correctly signed but malformed JSON or invalid `order.created` payload returns `400` with `INVALID_PAYLOAD` and safe field-level messages.
-- A valid delivery returns `202` with its order ID, `PENDING` state, and whether it was a duplicate. The response never includes the stored payload.
-- Repeated or simultaneous valid deliveries return `202` and leave one order plus one initial durable job in PostgreSQL.
+1. `POST /api/webhooks/orders` verifies raw-body HMAC-SHA256 before parsing.
+2. A valid order and one `sync_job` are stored in one transaction.
+3. PostgreSQL unique `order_id` prevents duplicate local orders/jobs.
+4. The worker searches or updates the Contact by normalized email.
+5. It searches or updates the Deal by unique `external_order_id`.
+6. It associates the Deal with the Contact and records each sync attempt.
 
-## HubSpot synchronization worker
+The worker retries HubSpot `429`, `5xx`, and network failures with bounded
+backoff, jitter, and `Retry-After` support. Permanent `4xx` errors are stored
+as failed jobs. Expired worker leases are recovered safely.
 
-The separate worker uses HubSpot's current dated `2026-09` CRM API paths and never exposes the access token to the browser.
+## HubSpot setup
 
-```bash
-# Terminal 1: API and dashboard
-npm run dev
+Use a HubSpot private app with:
 
-# Terminal 2: after completing the HubSpot setup below
-npm run worker
-```
+- `crm.objects.contacts.read`, `crm.objects.contacts.write`
+- `crm.objects.deals.read`, `crm.objects.deals.write`
+- `crm.schemas.deals.read`, `crm.schemas.deals.write`
 
-For each claimed job, the worker:
-
-1. Verifies that the Deal `external_order_id` property exists and is unique.
-2. Normalizes the customer email, then finds and updates a Contact or creates one.
-3. Finds a Deal by `external_order_id`; it updates that Deal when found, otherwise creates one.
-4. Saves the resolved Contact ID and Deal ID to PostgreSQL immediately after each step.
-5. Creates the idempotent default Deal-to-Contact association, then marks the job and order successful.
-
-Deal properties are `external_order_id`, `dealname`, `amount`, `deal_currency_code`, `closedate`, `pipeline`, and `dealstage`. `closedate` is the source `created_at` converted to UTC ISO-8601. HubSpot account currency configuration must allow the source currency (for example, PHP) or the write will be rejected.
-
-If a run is interrupted after a remote create but before local ID persistence, the next run searches by normalized email and the unique external order ID before it ever creates another remote object. If association fails after the Deal ID has been persisted, a later run updates and re-associates that same Deal. Phase 4 schedules transient failures for retry and recovers expired worker leases; permanent failures are retained for inspection.
-
-## Reliability, retries, and failure history
-
-Phase 4 keeps the worker durable across transient HubSpot failures and worker restarts. A `sync_jobs.attempts` value counts **total processing attempts**, including the first run; `WORKER_MAX_ATTEMPTS` defaults to `8`.
-
-- HTTP `429`, `500`, `502`, `503`, `504`, other `5xx` responses, and network failures are retryable. The worker stores the failed attempt, then returns the job to `PENDING` for a later claim.
-- Each retry uses capped exponential backoff with full jitter. HubSpot's `Retry-After` response header is honored when it is longer than the jittered delay, but it is capped at `WORKER_RETRY_MAX_DELAY_MS`.
-- Validation, authentication, authorization, and other non-429 `4xx` responses are permanent. The job and order become `FAILED` immediately; no unchanged request is retried.
-- Every worker claim creates a `sync_attempts` row. It records its attempt number, `PROCESSING`, `SUCCESS`, or `FAILED` state, any IDs already persisted for the Contact/Deal, a sanitized error, and start/completion timestamps. A scheduled retry is a new processing attempt, not a rewrite of history.
-- Jobs left in `PROCESSING` after their lease expires are marked as interrupted attempts and safely reclaimed when processing capacity remains. An expired final attempt becomes permanently `FAILED`. Exact lease matching prevents a stale worker from completing or failing a newer claim.
-
-HubSpot error records retain a sanitized category, error code/message, and correlation ID. Email addresses, bearer values, line breaks, and overlong diagnostics are redacted or bounded; access tokens and full webhook payloads are never logged or stored as errors.
-
-Set retry behavior in your uncommitted `.env`:
+Create or allow the app to create this unique Deal property:
 
 ```text
-WORKER_MAX_ATTEMPTS=8
-WORKER_RETRY_BASE_DELAY_MS=1000
-WORKER_RETRY_MAX_DELAY_MS=60000
+Label: External Order ID
+Name: external_order_id
+Type: Single-line text
+Unique values: enabled
 ```
 
-To inspect jobs and attempt history locally, start Prisma Studio:
+`created_at` is mapped to Deal `closedate`. The HubSpot account must support
+the incoming currency, such as `PHP`.
 
-```bash
-npm run db:studio
-```
+## Demo
 
-Open `SyncJob` for its queue state, retry time, and last error; open `SyncAttempt` for immutable per-run history. The dashboard provides the supported manual-retry path; do not edit real HubSpot records or manually alter queue rows merely to replay a job.
-
-### Development-only Phase 4 verification
-
-The opt-in PostgreSQL verification suite exercises the real repository and worker while returning mocked HubSpot HTTP responses. It never sends a request to HubSpot, uses unique `PHASE4-VERIFY-*` rows only, and deletes only those rows after each scenario.
-
-Stop `npm run worker` first, then run:
-
-```bash
-npm run test:phase4:verify
-```
-
-The suite refuses to start if any existing job is `PROCESSING`, preventing it from racing a real worker. It does not reset the database or alter non-verification rows.
-
-| Mocked response | Expected `Order` / `SyncJob` state | Expected `SyncAttempt` history |
-| --- | --- | --- |
-| `429` + `Retry-After: 5` | `PENDING`; `available_at` at least five seconds later | Attempt 1 `FAILED`, sanitized correlation ID, completion timestamp |
-| `500`, then `500` | `PENDING`; second scheduled delay is larger (exponential backoff) | Attempts 1 and 2 both `FAILED` |
-| `503` | `PENDING` with a scheduled retry | Attempt 1 `FAILED`, sanitized correlation ID |
-| Validation `400` | `FAILED`; no `next_retry_at` | Attempt 1 `FAILED` |
-| `503` at configured final attempt | `FAILED`; no `next_retry_at` | Each allowed attempt is retained as `FAILED` |
-| Expired worker lease | `SUCCESS` after recovery; job `COMPLETED` | Interrupted attempt `FAILED`, recovered attempt `SUCCESS`; previously stored Contact/Deal IDs are reused |
-
-### HubSpot account and property setup
-
-Use a test portal and a private app token for local development. The private app needs only:
-
-- `crm.objects.contacts.read` and `crm.objects.contacts.write`
-- `crm.objects.deals.read` and `crm.objects.deals.write`
-- `crm.schemas.deals.read` and `crm.schemas.deals.write` to verify or create the property
-
-Set the token and the pipeline/stage **internal IDs** in your uncommitted `.env`. The worker checks `external_order_id` at startup. If absent, it creates a single-line text Deal property in the `dealinformation` group with `hasUniqueValue: true`; it then verifies the API response. If the existing property is not unique, startup fails without processing a job.
-
-If the token cannot manage schemas, create it manually in **Settings → Data Management → Properties → Deal properties**:
-
-```text
-Label:         External Order ID
-Internal name: external_order_id
-Field type:    Single-line text
-Group:         Deal Information
-Unique values: enabled (set this when creating the property)
-```
-
-Do not use a non-unique property or alter it after orders exist. In HubSpot's `2026-09` API, portal validation rules and required record-creation fields also apply to API writes; configure any extra required Deal fields or associations before enabling the worker.
-
-The worker still requires `crm.schemas.deals.read` to verify that a manually created property is unique before it processes orders. A `403` at worker startup means the token needs the documented schema scopes; add them to the private app, regenerate the token if HubSpot requires it, update `.env`, and restart `npm run worker`.
-
-### Send a signed local demo webhook
-
-With the backend running and a non-placeholder secret in `.env`:
+Send an assessment-compatible signed webhook:
 
 ```bash
 npm run webhook:send
 ```
 
-Optionally provide another target URL:
+Expected response: `202 Accepted`. The worker then creates or updates the
+Contact and Deal. Open the dashboard, refresh, and inspect Orders or the
+latest 50 real sync attempts.
 
-```bash
-npm run webhook:send -- http://localhost:3000/api/webhooks/orders
-```
+For a terminal failed order, use **Retry**. The protected API requeues it
+atomically; the existing worker processes it. Existing HubSpot IDs and attempt
+history are retained.
 
-The sender generates a fresh demo order ID, signs the precise JSON body with the same `sha256=<hex>` convention, and exits nonzero for a non-2xx response. It never prints the signing secret.
+## Dashboard
 
-The generated order retains the assessment contract: `event: "order.created"`, a string `order_id`, offset-aware ISO `created_at`, a customer with email/name/phone, one or more `{ sku, name, qty, price }` items, uppercase ISO currency, and numeric total. Its ID and timestamp are deliberately fresh so the worker can create a current Deal and the seven-day exporter can demonstrate a matching record; the field names and example customer/item values match the supplied payload.
+The dashboard shows current order status, HubSpot IDs, errors, attempt history,
+and retry controls. It supports server-side status filtering, search,
+pagination, URL state, refresh, and CSV download.
 
-## Environment
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/orders` | Current orders with server-side filters/pagination |
+| `GET /api/orders/:orderId/attempts` | Stored attempt history for one order |
+| `GET /api/syncs` | Latest 50 real sync attempts |
+| `GET /api/syncs/stats` | Successful, failed, pending, processing counts |
+| `POST /api/orders/:orderId/retry` | Atomically requeue a terminal failed order |
+| `GET /api/exports/deals?days=7` | Download HubSpot Deals CSV |
 
-`.env.example` contains all expected variables and no credentials. `DATABASE_URL` and a `WEBHOOK_SIGNING_SECRET` of at least 16 characters are required when starting the API. `DASHBOARD_API_TOKEN` is a distinct, high-entropy bearer token required for monitoring, retry, and CSV-download endpoints. `npm run worker` additionally requires `HUBSPOT_ACCESS_TOKEN`, `HUBSPOT_PIPELINE_ID`, and `HUBSPOT_DEAL_STAGE_ID`. Use unique, high-entropy secrets in deployed environments; do not put them or any HubSpot credential in frontend variables or commit `.env`.
+Dashboard APIs require `DASHBOARD_API_TOKEN`. Search text can contain an email,
+so avoid sharing dashboard URLs containing `q`.
 
-The dashboard CSV bridge additionally uses these server-only settings:
+## CSV export
 
-```text
-PYTHON_EXECUTABLE=python3.11
-EXPORT_TIMEOUT_MS=90000
-EXPORT_MAX_CONCURRENT=1
-```
-
-Set `PYTHON_EXECUTABLE` to the absolute path of a Python 3.11+ interpreter when `python3.11` is not on `PATH`. `EXPORT_MAX_CONCURRENT` bounds Python subprocesses per API process; the default of one avoids overlapping accounting exports.
-
-## Phase 5 monitoring dashboard
-
-Start the API and Vite dashboard as usual:
-
-```bash
-npm run dev
-```
-
-Open `http://localhost:5173`. The Vite development server reads `DASHBOARD_API_TOKEN` from the root uncommitted `.env` and injects the `Authorization: Bearer` header only into its local `/api` proxy requests. You do not enter a token in the browser. It is deliberately separate from `HUBSPOT_ACCESS_TOKEN` and is not placed in frontend source, browser storage, or `VITE_*` build-time variables.
-
-For a deployed system, place the API/dashboard behind SSO or an authenticated reverse proxy and replace the shared local-demo bearer token with the organization’s identity mechanism. The API is fail-closed: if `DASHBOARD_API_TOKEN` is absent, dashboard endpoints return `503 DASHBOARD_AUTH_NOT_CONFIGURED`; missing or invalid credentials return `401`.
-
-| Method | Endpoint | Result |
-| --- | --- | --- |
-| `GET` | `/api/syncs?orderStatus=FAILED&q=ORD-10482&limit=20&page=1` | Up to 50 newest matching real attempt records, paginated; optional current-order status and search filters |
-| `GET` | `/api/syncs/stats` | Current `orders` counts: successful, failed, pending, and processing |
-| `GET` | `/api/syncs/:id` | One sync attempt with sanitized error, available HubSpot diagnostics, and known IDs |
-| `GET` | `/api/orders?status=FAILED&q=ORD-10482&limit=20&page=1` | Paginated current orders joined with durable job state; optional status and search filters |
-| `GET` | `/api/orders/:orderId/attempts` | All persisted immutable attempt rows for one order, newest attempt number first |
-| `GET` | `/api/orders/failed?limit=50&offset=0` | Paginated current failed orders from `orders`/`sync_jobs`, including failures with no `sync_attempts` row |
-| `POST` | `/api/orders/:orderId/retry` | Atomically requeues an unclaimed failed order for the existing worker |
-| `GET` | `/api/exports/deals?days=7` | Runs the existing Python exporter server-side and downloads a CSV; `days` is 1–30, default 7 |
-
-All dashboard endpoints require the dashboard bearer token. The lists intentionally do not return webhook payloads. The dashboard’s default **Orders & Sync Status** table reads `/api/orders`, not `/api/syncs`: it lists current orders and their durable job state, server-side filtered by `status` and paginated in stable `updated_at` order. It shows the latest recorded attempt when one exists, but an absent attempt remains absent.
-
-The Failed filter uses `GET /api/orders?status=FAILED`, so its total and rows use the same `orders.status = FAILED` predicate as the Failed summary card. It therefore includes older failed orders created before `sync_attempts` auditing was introduced. Those rows show no latest attempt and expand to an explicit “No recorded sync attempts” state; the application never fabricates audit history. The legacy `/api/orders/failed` endpoint remains available for direct operational use.
-
-The same table has an **Attempts (Latest 50)** view backed by `/api/syncs`. It is an immutable audit view: it returns at most its newest 50 real records, and its optional `orderStatus` filter filters those attempt records by their *current* parent-order state. Selecting an order’s attempt count in the Orders view requests `/api/orders/:orderId/attempts` and expands only that order’s persisted history. Each compact history card shows the attempt number, status, start/completion times, stored Contact/Deal IDs, and the complete sanitized stored failure text. Successful cards explicitly say “No error recorded.” A failed card is labelled as retry scheduled, retried later, or terminal when that conclusion is available from the current durable job; prior failures remain visible after a later success. Where a stored HubSpot error has them, the API also exposes its HTTP status, category, and correlation ID. No request headers, access tokens, or webhook payloads are returned. Both views show known Contact/Deal IDs where available, so a retry retains partial HubSpot completion instead of creating a new remote Deal.
-
-Manual retry is allowed only while both the order and its durable job are `FAILED`. The database transaction conditionally changes the failed job to `PENDING`, clears its lease/scheduled error, and leaves `sync_attempts`, payload, HubSpot Contact ID, and HubSpot Deal ID untouched. Attempt numbers stay monotonic so audit history remains valid; an exhausted job receives one new bounded `WORKER_MAX_ATTEMPTS` allowance. A simultaneous second retry conditionally updates zero rows and receives `409 RETRY_NOT_AVAILABLE`. The normal database-backed worker claims the pending job; the dashboard never calls HubSpot directly.
-
-The dashboard includes summary cards, a single responsive Orders & Sync Status table, server-side status filtering and search, expandable audit history, an explicit latest-50 Attempts view, manual refresh, loading/empty/error states, accessible status labels, a confirmation dialog, disabled retry controls for non-eligible jobs, and success/error notices. Search matches order ID, the stored customer email, and known HubSpot Contact/Deal IDs in PostgreSQL before pagination. Typing is debounced by 300ms, and the clear control resets the search and page.
-
-Both views use validated 10, 20 (default), or 50 row pages. Pagination displays the first/last three pages, the current page and its neighbors, and ellipses only across gaps; mobile layouts show a smaller page-number range. The response includes `page`, `limit`, `totalItems`, and `totalPages` and the UI displays the shown record range.
-
-View, status, search query, page, and row limit are restored from the URL, for example `/?view=orders&status=failed&q=ORD-DEMO&page=3&limit=20`. Click navigation uses browser history; debounced typing replaces the current history entry. **A search query can contain an email address and is therefore personal data.** Avoid sharing, logging, or retaining dashboard URLs containing `q`; URLs never include credentials or HubSpot tokens. A failed order can be retried from either view only when its current durable job is terminal `FAILED`; the protected transaction remains the authority if another request wins the race. Its **Export Deals (Last 7 Days)** button calls the protected Express endpoint through the existing Vite proxy, downloads the returned CSV, and releases the browser object URL after download. The browser never receives `HUBSPOT_ACCESS_TOKEN`.
-
-For each dashboard export, Express starts the unchanged standalone Python CLI with `execFile` and explicit arguments—never through a shell. It passes the HubSpot token only in the child environment, gives the request a new OS temporary directory/file, enforces the configured timeout and concurrency cap, and deletes the temporary output after the response completes or on failure. It returns `text/csv` with a fixed safe attachment filename. Start `npm run worker` separately only when you want requeued sync work to be processed; exporting does not use the worker or database.
-
-## Python accounting export
-
-`scripts/export_deals.py` is a standalone, **read-only** Python 3.11+ program. It has no dependency on the backend, worker, frontend, PostgreSQL, or third-party Python packages. It uses the same `HUBSPOT_ACCESS_TOKEN` from the root uncommitted `.env` (or an already-set environment variable) and the existing dated HubSpot Deal Search API path.
-
-The dashboard bridge reuses this exact script with `--days` and an isolated `--output` path; its normal CLI remains available for accounting teams and automation.
-
-The token needs `crm.objects.deals.read`. The exporter makes only `POST /crm/objects/2026-09/deals/search` requests; it never creates, updates, associates, or deletes HubSpot records.
-
-Create an optional virtual environment, then run the unit tests:
-
-```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-python --version
-# Python 3.11 or newer
-python -m unittest discover -s scripts/tests -t . -v
-```
-
-There is no `scripts/requirements.txt` because the exporter uses only the Python standard library.
-
-Export the rolling seven-day window to the default destination:
+The Python exporter is read-only and independent of the app:
 
 ```bash
 python3.11 scripts/export_deals.py
+python3.11 scripts/export_deals.py --output exports/deals.csv --days 14
 ```
 
-Choose a destination or another rolling UTC window:
-
-```bash
-python3.11 scripts/export_deals.py --output exports/accounting/deals.csv --days 14
-```
-
-The default output is `exports/hubspot_deals_last_7_days.csv`; parent directories are created automatically. The CSV is UTF-8 with standard CSV quoting and these columns:
+It exports all Deals created in a rolling UTC date window. It follows HubSpot
+pagination, preserves monetary strings, handles empty properties, and retries
+temporary `429`/`5xx` failures. Output columns are:
 
 ```text
 Deal ID, External Order ID, Deal Name, Amount, Currency, Pipeline ID,
 Deal Stage ID, Close Date, Created Date
 ```
 
-The date range is a rolling inclusive UTC interval from `now - --days` through `now`, not seven calendar dates. HubSpot filters the Deal `createdate` field in milliseconds; the exporter requests all pages (100 records per page) and does not limit records to integration-owned Deals. Monetary values stay as HubSpot-provided strings, avoiding floating-point rounding. Missing properties become empty CSV cells. It requests the required `hs_currency_code` and falls back to `deal_currency_code` when the existing worker/account exposes that property name.
+## Optional n8n bonus
 
-For `429` and temporary `5xx` responses, the exporter makes at most four total requests with capped exponential backoff, jitter, and `Retry-After` honoring. Network errors also retry within that bound. Authentication and other permanent `4xx` errors fail immediately. Diagnostics are bounded and redact a Bearer value; the access token is never printed. An empty result is successful and produces a header-only CSV.
+[`n8n/order-to-hubspot.json`](n8n/order-to-hubspot.json) is an independent
+n8n workflow. It verifies raw-body HMAC, validates the order, synchronizes the
+Contact/Deal, and associates the records. Its error workflow sends sanitized
+SMTP alerts.
 
-Troubleshooting:
+Verified n8n results:
 
-- `HUBSPOT_ACCESS_TOKEN is required`: set it in the root `.env` or the process environment; do not put it in source code.
-- `401` or `403`: verify the private-app token and `crm.objects.deals.read` scope.
-- `429` or `5xx`: the exporter retries automatically; after the bounded limit, run it again later.
-- No rows: the sample webhook timestamp is outside the current rolling window unless you have created a recent Deal.
+- Invalid HMAC → `401`
+- Valid HMAC + invalid payload → `400`
+- Valid order → `200`, Deal creation, Contact association
+- Sequential duplicate order → same Deal ID
+- Automatic failure → SMTP alert
+
+The exports are sanitized: no secrets, credential IDs, workflow IDs, instance
+metadata, or execution data. After import, bind credentials and select the
+Error Workflow again in the main workflow settings. Both Deal write nodes use
+`pipeline: default` and `dealstage: appointmentscheduled`.
+
+Sequential replay is verified. Concurrent first deliveries can still race in
+n8n; use the Express/PostgreSQL worker for production-grade idempotency and
+retries. See [n8n/README.md](n8n/README.md) for setup details.
 
 ## Checks
 
@@ -367,73 +215,32 @@ npm run lint
 npm test
 npm run build
 python3.11 -m unittest discover -s scripts/tests -t . -v
-```
 
-`npm test` includes PostgreSQL integration coverage for valid, invalid, unsigned, tampered, duplicate, and concurrent webhook deliveries. It also has mock-based tests for contact/deal mapping, update-vs-create behavior, Deal recovery by `external_order_id`, association, property verification, dashboard API authentication/response structure/retry conflict behavior, CSV-export authentication/validation/attachment/failure/timeout behavior, Python subprocess cleanup/concurrency behavior, and React dashboard loading/retry/download interactions. It makes no real HubSpot requests.
-
-Run the opt-in real-PostgreSQL/mock-HubSpot reliability suite only after stopping the worker:
-
-```bash
+# Optional PostgreSQL reliability suite; stop the worker first
 npm run test:phase4:verify
 ```
 
-## Demo walkthrough
+The test suite makes no real HubSpot requests. The Phase 4 suite uses mocked
+HubSpot responses and only cleans up its own verification rows.
 
-1. Create `.env` from `.env.example`, configure the HubSpot private-app token, pipeline/stage IDs, webhook secret, and dashboard token.
-2. Start PostgreSQL and apply migrations, then run `npm run dev` and `npm run worker` in a separate terminal.
-3. Run `npm run webhook:send`. It returns `202`; the worker creates or updates the Contact, reconciles/creates the uniquely keyed Deal, associates them, and records the result.
-4. Open `http://localhost:5173`, refresh the Orders view, expand the attempt button, and inspect stored attempt/error details. Use the Attempts view for the newest 50 real records.
-5. For a terminal failed order, use **Retry**. The API atomically requeues it and the normal worker processes it; no payload, historical attempt, or known HubSpot ID is discarded.
-6. Use **Export Deals (Last 7 Days)** to download a CSV, or independently run `python3.11 scripts/export_deals.py`.
+## Requirements status
 
-## Security and architecture decisions
+| Requirement | Status |
+| --- | --- |
+| Signed TypeScript webhook | Complete |
+| HubSpot Contact/Deal sync | Complete |
+| Idempotency | Complete in Express/PostgreSQL |
+| Retry and failure logging | Complete |
+| PostgreSQL sync history | Complete |
+| React monitoring dashboard | Complete |
+| Python Deal CSV export | Complete |
+| Setup and documentation | Complete |
+| Optional n8n workflow | Complete; see concurrency limitation above |
 
-- Webhooks are verified against their raw bytes before JSON parsing with a length-checked constant-time HMAC comparison. PostgreSQL’s unique `order_id` and the unique HubSpot `external_order_id` defend both local and remote duplicates.
-- The API acknowledges durable local work and never calls HubSpot synchronously. A separate PostgreSQL-leased worker makes recovery observable and avoids an in-memory queue as the source of truth.
-- Partial Contact/Deal IDs are persisted as soon as they are known. A later run updates/searches them rather than creating a duplicate remote record.
-- Retry is deliberately narrow: rate limiting, `5xx`, and transport failures retry with bounded exponential jitter; ordinary `4xx` validation/authentication failures become inspectable terminal failures.
-- Dashboard and CSV endpoints fail closed without `DASHBOARD_API_TOKEN`. The local Vite or optional Compose proxy attaches that distinct token server-side; `HUBSPOT_ACCESS_TOKEN` is never a `VITE_*` variable or browser value.
-- The Python exporter uses the standard library, direct read-only Deal Search API calls, UTC-aware rolling date filters, cursor pagination, and source decimal strings to avoid floating-point rounding.
+## Notes
 
-## Optional n8n bonus workflow
-
-An independent, importable n8n alternative is available in [`n8n/`](n8n/).
-It receives the assessment payload directly rather than calling Express, enables
-Webhook Raw Body, calculates HMAC-SHA256 from its binary raw-body input with a
-stored Crypto credential, performs a length-checked `crypto.timingSafeEqual`,
-then searches/upserts the Contact and the uniquely keyed Deal before creating a
-default association. A separate Error Trigger workflow sanitizes execution
-metadata before notifying an operator through configured SMTP.
-
-Both Deal write nodes use the verified HubSpot internal values `pipeline:
-default` and `dealstage: appointmentscheduled`.
-
-The workflow JSON deliberately contains no credentials, tokens, production
-email addresses, HubSpot test data, credential IDs, instance metadata, saved
-workflow IDs, or execution data. It was imported and runtime-verified in a
-local n8n instance: invalid HMAC returned `401`, a valid HMAC with invalid
-payload returned `400`, a valid order created/associated a Deal and returned
-`200`, a sequential replay returned the same Deal ID, and an automatic failure
-sent the SMTP alert. See [the n8n guide](n8n/README.md) for exact re-import
-steps, credential binding, required Error Workflow reselection,
-`NODE_FUNCTION_ALLOW_BUILTIN=crypto` for self-hosting, raw-byte fidelity,
-execution-data privacy, and the concurrent-delivery limitation.
-
-## Assumptions and limitations
-
-- The store and HubSpot portal are configured for a single currency/pipeline/stage mapping. HubSpot must have the source currency enabled, and any portal-required Deal fields must be supplied/configured.
-- `created_at` is mapped to Deal `closedate` as the agreed business approximation for this assessment.
-- The local dashboard bearer-token proxy is suitable only for demonstration. Production needs SSO/RBAC, HTTPS, a secret manager, and a trusted reverse proxy.
-- Attempt history introduced after older jobs may have gaps. The dashboard reports only persisted immutable attempts and deliberately does not manufacture legacy failures.
-- The PostgreSQL queue is appropriate for this take-home scale. Higher throughput would warrant a dedicated queue, metrics/tracing, alerting, and a dead-letter/reconciliation process.
-- The optional n8n workflow is an independently deployable demonstration, not
-  a replacement for the durable Express/PostgreSQL worker. Its sequential
-  lookup/upsert approach can race under simultaneous first delivery; retain the
-  application workflow for production-grade retry, leasing, attempt history,
-  and concurrent idempotency.
-
-## Submission readiness
-
-Phase 7 is complete: the API safely accepts durable local work, the separate worker synchronizes an idempotent Contact/Deal association, transient HubSpot failures are scheduled for durable retry with attempt history and lease recovery, the protected React dashboard monitors/requeues failed orders and downloads a server-side CSV export, and the standalone Python exporter writes a rolling UTC Deal CSV. Docker Compose supports both database-only local development and an optional full-stack review profile. The independent n8n bonus has also been runtime-verified and its committed exports were sanitized for safe re-import.
-
-Before publishing, rerun the checks above with the worker stopped for database-writing integration tests, inspect the staged diff for secrets, and confirm the GitHub repository visibility/permissions. Missing HubSpot credentials would block only a real-account demonstration; mocked automated tests remain credential-free.
+- This is a single-account integration with one configured pipeline and stage.
+- Production should use HTTPS, SSO/RBAC, a secret manager, monitoring, and a
+  dedicated queue if throughput exceeds PostgreSQL-worker capacity.
+- Do not reset the database or edit durable job rows to force a retry; use the
+  dashboard Retry action.

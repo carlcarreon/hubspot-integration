@@ -1,6 +1,6 @@
 # HubSpot Order Sync
 
-This repository is the Phase 1 foundation for a signed order-webhook integration. It uses an Express/TypeScript API, PostgreSQL, Prisma ORM, a React/Vite/Tailwind dashboard, and reserves Python for the later CSV exporter.
+This repository implements Phase 3 of a signed order-webhook integration. It uses an Express/TypeScript API, PostgreSQL, Prisma ORM, a React/Vite/Tailwind dashboard, and reserves Python for the later CSV exporter.
 
 ## Prerequisites
 
@@ -21,7 +21,7 @@ npm run db:generate
 npm run dev
 ```
 
-The API listens at `http://localhost:3000`, and Vite serves the dashboard at `http://localhost:5173`. The Vite development server proxies `/api` to the backend, so the Phase 1 dashboard verifies the same health endpoint it will use in later phases.
+The API listens at `http://localhost:3000`, and Vite serves the dashboard at `http://localhost:5173`. The Vite development server proxies `/api` to the backend.
 
 ```bash
 curl http://localhost:3000/api/health
@@ -58,7 +58,7 @@ npm run db:studio
 
 The provided `DATABASE_URL` targets Docker Compose PostgreSQL. For another PostgreSQL server, use a standard URL such as `postgresql://USER:PASSWORD@HOST:5432/DATABASE?schema=public`; URL-encode special characters in credentials.
 
-## Phase 1 architecture
+## Architecture
 
 ```text
 backend/src/
@@ -67,8 +67,8 @@ backend/src/
   services/      Business use-cases
   repositories/  PostgreSQL/Prisma data access
   middleware/    Shared HTTP behavior and safe errors
-  validators/    Zod schemas (webhook schema comes in Phase 2)
-  jobs/          Durable worker implementation (introduced in later phases)
+  validators/    Zod schemas and safe payload parsing
+  jobs/          Durable HubSpot synchronization worker
   config/        Validated environment and database client
   tests/         API tests
 backend/prisma/
@@ -78,11 +78,92 @@ frontend/        React + Vite + Tailwind dashboard
 scripts/         Future Python CSV exporter and webhook sender
 ```
 
-The initial migration creates `orders`, `sync_attempts`, and `sync_jobs`. `sync_jobs` is a persistent queue foundation: later webhook handling will transactionally create an order and a pending job; a separate worker will claim jobs using a lease, preserve retry scheduling, and create `sync_attempts` history. Phase 1 deliberately does not receive webhooks or start HubSpot work.
+The initial migration creates `orders`, `sync_attempts`, and `sync_jobs`. A signed webhook transactionally creates its `Order` and exactly one pending `SyncJob` in one Prisma nested write. PostgreSQL's unique `orders.order_id` constraint handles concurrent duplicate deliveries: the winner creates the order/job pair, and every losing request reads and returns that existing order. The separate worker conditionally updates a pending row to `PROCESSING`, so concurrent worker processes cannot claim the same job.
+
+Controllers only adapt HTTP requests and responses. The webhook service parses and validates the payload before delegating persistence; the repository is the only layer that performs Prisma database operations.
+
+## Secure order webhooks
+
+`POST /api/webhooks/orders` accepts only the supplied `order.created` shape. Send the exact JSON bytes with:
+
+```text
+X-Webhook-Signature: sha256=<lowercase_hex_hmac_sha256>
+```
+
+The backend reads the raw request bytes (up to 100kb), calculates HMAC-SHA256 with `WEBHOOK_SIGNING_SECRET`, and performs a length-checked `timingSafeEqual` comparison before parsing JSON or validating it with Zod.
+
+- Missing, malformed, invalid, or tampered signatures return `401` with `INVALID_SIGNATURE`.
+- A correctly signed but malformed JSON or invalid `order.created` payload returns `400` with `INVALID_PAYLOAD` and safe field-level messages.
+- A valid delivery returns `202` with its order ID, `PENDING` state, and whether it was a duplicate. The response never includes the stored payload.
+- Repeated or simultaneous valid deliveries return `202` and leave one order plus one initial durable job in PostgreSQL.
+
+## HubSpot synchronization worker
+
+Phase 3 adds the separate worker process. It uses HubSpot's current dated `2026-09` CRM API paths and never exposes the access token to the browser.
+
+```bash
+# Terminal 1: API and dashboard
+npm run dev
+
+# Terminal 2: after completing the HubSpot setup below
+npm run worker
+```
+
+For each claimed job, the worker:
+
+1. Verifies that the Deal `external_order_id` property exists and is unique.
+2. Normalizes the customer email, then finds and updates a Contact or creates one.
+3. Finds a Deal by `external_order_id`; it updates that Deal when found, otherwise creates one.
+4. Saves the resolved Contact ID and Deal ID to PostgreSQL immediately after each step.
+5. Creates the idempotent default Deal-to-Contact association, then marks the job and order successful.
+
+Deal properties are `external_order_id`, `dealname`, `amount`, `deal_currency_code`, `closedate`, `pipeline`, and `dealstage`. `closedate` is the source `created_at` converted to UTC ISO-8601. HubSpot account currency configuration must allow the source currency (for example, PHP) or the write will be rejected.
+
+If a run is interrupted after a remote create but before local ID persistence, the next run searches by normalized email and the unique external order ID before it ever creates another remote object. If association fails after the Deal ID has been persisted, a later run updates and re-associates that same Deal. Phase 4 adds automatic retry scheduling and expired-lease recovery; this phase marks unhandled worker failures as `FAILED` for inspection.
+
+### HubSpot account and property setup
+
+Use a test portal and a private app token for local development. The private app needs only:
+
+- `crm.objects.contacts.read` and `crm.objects.contacts.write`
+- `crm.objects.deals.read` and `crm.objects.deals.write`
+- `crm.schemas.deals.read` and `crm.schemas.deals.write` to verify or create the property
+
+Set the token and the pipeline/stage **internal IDs** in your uncommitted `.env`. The worker checks `external_order_id` at startup. If absent, it creates a single-line text Deal property in the `dealinformation` group with `hasUniqueValue: true`; it then verifies the API response. If the existing property is not unique, startup fails without processing a job.
+
+If the token cannot manage schemas, create it manually in **Settings → Data Management → Properties → Deal properties**:
+
+```text
+Label:         External Order ID
+Internal name: external_order_id
+Field type:    Single-line text
+Group:         Deal Information
+Unique values: enabled (set this when creating the property)
+```
+
+Do not use a non-unique property or alter it after orders exist. In HubSpot's `2026-09` API, portal validation rules and required record-creation fields also apply to API writes; configure any extra required Deal fields or associations before enabling the worker.
+
+The worker still requires `crm.schemas.deals.read` to verify that a manually created property is unique before it processes orders. A `403` at worker startup means the token needs the documented schema scopes; add them to the private app, regenerate the token if HubSpot requires it, update `.env`, and restart `npm run worker`.
+
+### Send a signed local demo webhook
+
+With the backend running and a non-placeholder secret in `.env`:
+
+```bash
+npm run webhook:send
+```
+
+Optionally provide another target URL:
+
+```bash
+npm run webhook:send -- http://localhost:3000/api/webhooks/orders
+```
+
+The sender generates a fresh demo order ID, signs the precise JSON body with the same `sha256=<hex>` convention, and exits nonzero for a non-2xx response. It never prints the signing secret.
 
 ## Environment
 
-`.env.example` contains all expected variables and no credentials. Only `DATABASE_URL` is required to run Phase 1. HubSpot and webhook values are intentionally validated as later features are enabled; do not put them in frontend variables or commit `.env`.
+`.env.example` contains all expected variables and no credentials. `DATABASE_URL` and a `WEBHOOK_SIGNING_SECRET` of at least 16 characters are required when starting the API. `npm run worker` additionally requires `HUBSPOT_ACCESS_TOKEN`, `HUBSPOT_PIPELINE_ID`, and `HUBSPOT_DEAL_STAGE_ID`. Use unique, high-entropy secrets in deployed environments; do not put them or any HubSpot credential in frontend variables or commit `.env`.
 
 ## Checks
 
@@ -92,6 +173,8 @@ npm test
 npm run build
 ```
 
+`npm test` includes PostgreSQL integration coverage for valid, invalid, unsigned, tampered, duplicate, and concurrent webhook deliveries. It also has mock-based tests for contact/deal mapping, update-vs-create behavior, Deal recovery by `external_order_id`, association, and property verification. It makes no real HubSpot requests.
+
 ## Current scope
 
-Phase 1 is complete when the application installs, PostgreSQL migrations apply, the health endpoint reports database readiness, and the dashboard can reach that API. The webhook receiver, HubSpot client, job execution, operations views, and Python exporter are intentionally deferred to later phases.
+Phase 3 is complete: the API safely accepts durable local work and the separate worker synchronizes a Contact, an idempotent Deal, and their association through HubSpot. Automatic retry scheduling, expired-lease recovery, dashboard operations, and the Python exporter are intentionally deferred to later phases.

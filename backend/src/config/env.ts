@@ -1,5 +1,10 @@
-import 'dotenv/config';
+import { config } from 'dotenv';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+
+const configurationDirectory = dirname(fileURLToPath(import.meta.url));
+config({ path: resolve(configurationDirectory, '../../../.env'), quiet: true });
 
 const optionalString = z.preprocess(
   (value) => (value === '' ? undefined : value),
@@ -11,10 +16,12 @@ const environmentSchema = z.object({
   API_PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
   DATABASE_URL: z.string().url().startsWith('postgresql://'),
   FRONTEND_ORIGIN: z.string().url().default('http://localhost:5173'),
-  WEBHOOK_SIGNING_SECRET: optionalString,
+  WEBHOOK_SIGNING_SECRET: z.string().min(16),
   HUBSPOT_ACCESS_TOKEN: optionalString,
   HUBSPOT_PIPELINE_ID: optionalString,
   HUBSPOT_DEAL_STAGE_ID: optionalString,
+  WORKER_POLL_INTERVAL_MS: z.coerce.number().int().min(100).max(60_000).default(1_000),
+  WORKER_LEASE_SECONDS: z.coerce.number().int().min(30).max(3_600).default(300),
 });
 
 export type Environment = z.infer<typeof environmentSchema>;
@@ -28,4 +35,26 @@ export function loadEnvironment(input: NodeJS.ProcessEnv = process.env): Environ
   }
 
   return parsed.data;
+}
+
+export type HubSpotEnvironment = Required<Pick<Environment,
+  'HUBSPOT_ACCESS_TOKEN' | 'HUBSPOT_PIPELINE_ID' | 'HUBSPOT_DEAL_STAGE_ID'
+>>;
+
+export function requireHubSpotEnvironment(environment: Environment): HubSpotEnvironment {
+  const missing = [
+    'HUBSPOT_ACCESS_TOKEN',
+    'HUBSPOT_PIPELINE_ID',
+    'HUBSPOT_DEAL_STAGE_ID',
+  ].filter((key) => !environment[key as keyof HubSpotEnvironment]);
+
+  if (missing.length > 0) {
+    throw new Error(`Worker configuration is incomplete: ${missing.join(', ')}.`);
+  }
+
+  return {
+    HUBSPOT_ACCESS_TOKEN: environment.HUBSPOT_ACCESS_TOKEN!,
+    HUBSPOT_PIPELINE_ID: environment.HUBSPOT_PIPELINE_ID!,
+    HUBSPOT_DEAL_STAGE_ID: environment.HUBSPOT_DEAL_STAGE_ID!,
+  };
 }

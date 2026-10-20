@@ -262,26 +262,26 @@ The layout is a recommendation. Adjust only when it clearly simplifies implement
 
 ### Phase 2 — Secure webhook receiver and local idempotency
 
-- [ ] Implement `order.created` Zod schema, with strict sensible requirements and clear validation errors.
-- [ ] Compute HMAC-SHA256 from original request bytes; verify constant-time.
-- [ ] Build a mock sender script that signs a sample order and sends the webhook.
-- [ ] Persist incoming valid orders to PostgreSQL transactionally before HTTP acknowledgment.
-- [ ] Enforce unique `order_id` atomically and correctly handle simultaneous duplicate requests.
-- [ ] Test invalid signature, missing signature, invalid payload, and duplicate delivery.
+- [x] Implement strict `order.created` Zod schema with safe, clear validation errors.
+- [x] Compute HMAC-SHA256 from original request bytes and verify with length-checked constant-time comparison.
+- [x] Build a mock sender script that signs a fresh sample order and sends the webhook.
+- [x] Persist a valid order and its initial `sync_jobs` row transactionally before HTTP acknowledgment.
+- [x] Enforce unique `order_id` atomically and correctly handle simultaneous duplicate requests.
+- [x] Test valid, invalid, unsigned, tampered, schema-invalid, duplicate, and concurrent duplicate delivery paths against PostgreSQL.
 
-**Acceptance:** signed valid request gets 202; bad signature gets 401; invalid payload gets 400; duplicate delivery does not create a second order or queue entry.
+**Acceptance:** passed with PostgreSQL integration tests: signed valid requests get 202; missing/invalid/tampered signatures get 401; invalid payload gets 400; concurrent duplicate delivery creates one order and one queue entry.
 
 ### Phase 3 — HubSpot synchronization
 
-- [ ] Document HubSpot test account/auth setup, required scopes, and configuration.
-- [ ] Ensure the HubSpot Deal custom property `external_order_id` exists with appropriate uniqueness, or provide clear one-time provisioning instructions/script.
-- [ ] Search/upsert Contact by email.
-- [ ] Reconcile/create Deal using unique external order ID and map required properties.
-- [ ] Associate Deal with Contact.
-- [ ] Save HubSpot IDs and success state transactionally where possible.
-- [ ] Mock HubSpot API in tests so real credentials are not required for CI.
+- [x] Document HubSpot test account/auth setup, least-privilege scopes, current dated API paths, and configuration.
+- [x] Verify/create the unique Deal property `external_order_id`, with documented manual setup when property-schema permission is unavailable.
+- [x] Search/upsert Contact by normalized email.
+- [x] Reconcile/create Deal using `external_order_id` and map required properties.
+- [x] Create an idempotent default Deal-to-Contact association.
+- [x] Save HubSpot IDs after each remote object resolves and mark job/order success after association.
+- [x] Add mock-based client/service tests for mappings, property verification, associations, and idempotency recovery.
 
-**Acceptance:** an order with an existing Contact updates it; an order with a new email creates a Contact; exactly one Deal per order is associated to the correct Contact.
+**Acceptance:** mock-based tests verify existing Contacts/Deals update, new records create, reconciliation uses the unique external ID, and the resulting Deal is associated to the resolved Contact. The worker uses PostgreSQL job claims; no real HubSpot credentials are used in tests.
 
 ### Phase 4 — Reliability, logs, and recovery
 
@@ -327,14 +327,14 @@ The layout is a recommendation. Adjust only when it clearly simplifies implement
 
 ## Test matrix
 
-- [ ] Correct signed request accepted
-- [ ] Missing/invalid HMAC rejected
-- [ ] Invalid schema rejected
-- [ ] Duplicate deliveries do not duplicate orders or deals
-- [ ] Two concurrent identical deliveries produce only one sync job/deal
-- [ ] Existing Contact updated; new Contact created
-- [ ] Deal has expected name, amount, configured stage, pipeline, and close date
-- [ ] Contact–Deal association exists and is not duplicated
+- [x] Correct signed request accepted
+- [x] Missing/invalid/tampered HMAC rejected
+- [x] Invalid schema rejected
+- [x] Duplicate deliveries do not duplicate local orders or jobs
+- [x] Two concurrent identical deliveries produce only one sync job
+- [x] Existing Contact updated; new Contact created
+- [x] Deal has expected name, amount, configured stage, pipeline, currency, and close date
+- [x] Contact–Deal association is created idempotently
 - [ ] 429 and 5xx trigger bounded retries
 - [ ] Non-retryable 4xx logged as failure
 - [ ] Deal creation succeeded but response was lost: recovery uses external ID

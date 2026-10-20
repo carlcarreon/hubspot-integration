@@ -2,10 +2,14 @@ import { createApp } from './app.js';
 import { prisma } from './config/database.js';
 import { loadEnvironment } from './config/env.js';
 import { PrismaHealthRepository } from './repositories/health.repository.js';
+import { PrismaOrderRepository } from './repositories/order.repository.js';
 
 const environment = loadEnvironment();
 const app = createApp(
-  { healthRepository: new PrismaHealthRepository(prisma) },
+  {
+    healthRepository: new PrismaHealthRepository(prisma),
+    orderRepository: new PrismaOrderRepository(prisma),
+  },
   environment,
 );
 

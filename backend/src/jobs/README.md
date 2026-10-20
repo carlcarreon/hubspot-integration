@@ -1,3 +1,5 @@
 # Durable jobs
 
-`SyncJob` is already persisted by the Phase 1 Prisma migration. In later phases, a worker in this directory will atomically claim eligible rows using `status`, `availableAt`, and `processingLeaseUntil`, then create `SyncAttempt` history records. No background HubSpot work runs in Phase 1.
+`SyncJob` is persisted by the initial Prisma migration and is created transactionally with every unique valid order webhook. `sync-worker.ts` runs as a separate process, conditionally claims `PENDING` rows, synchronizes their contacts/deals, and persists IDs before marking the job complete. It does not run in the API process.
+
+Phase 4 will extend this with expired-lease recovery, retry scheduling, and `SyncAttempt` audit records.

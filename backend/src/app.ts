@@ -6,6 +6,7 @@ import { errorHandler } from './middleware/error-handler.js';
 import { notFoundHandler } from './middleware/not-found.js';
 import type { HealthRepository } from './repositories/health.repository.js';
 import type { OrderRepository } from './repositories/order.repository.js';
+import type { SyncMonitoringRepository } from './repositories/sync-monitoring.repository.js';
 import { createApiRouter } from './routes/index.js';
 import { createOrderWebhookRouter } from './routes/order-webhook.routes.js';
 import { OrderWebhookService } from './services/order-webhook.service.js';
@@ -14,6 +15,7 @@ import { WebhookSignatureService } from './services/webhook-signature.service.js
 type AppDependencies = {
   healthRepository: HealthRepository;
   orderRepository: OrderRepository;
+  syncMonitoringRepository?: SyncMonitoringRepository;
 };
 
 export function createApp(
@@ -32,7 +34,10 @@ export function createApp(
   app.use('/api/webhooks', express.raw({ type: () => true, limit: '100kb' }));
   app.use('/api/webhooks', createOrderWebhookRouter(orderWebhookController, signatureService));
   app.use(express.json({ limit: '100kb' }));
-  app.use('/api', createApiRouter(dependencies));
+  app.use('/api', createApiRouter({
+    ...dependencies,
+    dashboardApiToken: environment.DASHBOARD_API_TOKEN,
+  }));
   app.use(notFoundHandler);
   app.use(errorHandler);
 

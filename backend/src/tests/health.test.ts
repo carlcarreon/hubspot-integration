@@ -11,6 +11,7 @@ const environment: Environment = {
   DATABASE_URL: 'postgresql://hubspot:hubspot@localhost:5432/hubspot_order_sync',
   FRONTEND_ORIGIN: 'http://localhost:5173',
   WEBHOOK_SIGNING_SECRET: 'test-webhook-signing-secret',
+  DASHBOARD_API_TOKEN: undefined,
   WORKER_POLL_INTERVAL_MS: 1_000,
   WORKER_LEASE_SECONDS: 300,
   WORKER_MAX_ATTEMPTS: 8,

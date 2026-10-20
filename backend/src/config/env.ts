@@ -17,6 +17,7 @@ const environmentSchema = z.object({
   DATABASE_URL: z.string().url().startsWith('postgresql://'),
   FRONTEND_ORIGIN: z.string().url().default('http://localhost:5173'),
   WEBHOOK_SIGNING_SECRET: z.string().min(16),
+  DASHBOARD_API_TOKEN: optionalString,
   HUBSPOT_ACCESS_TOKEN: optionalString,
   HUBSPOT_PIPELINE_ID: optionalString,
   HUBSPOT_DEAL_STAGE_ID: optionalString,

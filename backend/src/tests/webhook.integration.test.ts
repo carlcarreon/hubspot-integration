@@ -14,6 +14,7 @@ const testEnvironment: Environment = {
   DATABASE_URL: process.env.DATABASE_URL!,
   FRONTEND_ORIGIN: 'http://localhost:5173',
   WEBHOOK_SIGNING_SECRET: signingSecret,
+  DASHBOARD_API_TOKEN: undefined,
   WORKER_POLL_INTERVAL_MS: 1_000,
   WORKER_LEASE_SECONDS: 300,
   WORKER_MAX_ATTEMPTS: 8,

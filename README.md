@@ -1,6 +1,6 @@
 # HubSpot Order Sync
 
-This repository implements Phase 4 of a signed order-webhook integration. It uses an Express/TypeScript API, PostgreSQL, Prisma ORM, a React/Vite/Tailwind dashboard, and reserves Python for the later CSV exporter.
+This repository implements Phase 5 of a signed order-webhook integration. It uses an Express/TypeScript API, PostgreSQL, Prisma ORM, a React/Vite/Tailwind sync-monitoring dashboard, and reserves Python for the later CSV exporter.
 
 ## Prerequisites
 
@@ -212,7 +212,32 @@ The sender generates a fresh demo order ID, signs the precise JSON body with the
 
 ## Environment
 
-`.env.example` contains all expected variables and no credentials. `DATABASE_URL` and a `WEBHOOK_SIGNING_SECRET` of at least 16 characters are required when starting the API. `npm run worker` additionally requires `HUBSPOT_ACCESS_TOKEN`, `HUBSPOT_PIPELINE_ID`, and `HUBSPOT_DEAL_STAGE_ID`. Use unique, high-entropy secrets in deployed environments; do not put them or any HubSpot credential in frontend variables or commit `.env`.
+`.env.example` contains all expected variables and no credentials. `DATABASE_URL` and a `WEBHOOK_SIGNING_SECRET` of at least 16 characters are required when starting the API. `DASHBOARD_API_TOKEN` is a distinct, high-entropy bearer token required for monitoring and retry endpoints. `npm run worker` additionally requires `HUBSPOT_ACCESS_TOKEN`, `HUBSPOT_PIPELINE_ID`, and `HUBSPOT_DEAL_STAGE_ID`. Use unique, high-entropy secrets in deployed environments; do not put them or any HubSpot credential in frontend variables or commit `.env`.
+
+## Phase 5 monitoring dashboard
+
+Start the API and Vite dashboard as usual:
+
+```bash
+npm run dev
+```
+
+Open `http://localhost:5173`. The Vite development server reads `DASHBOARD_API_TOKEN` from the root uncommitted `.env` and injects the `Authorization: Bearer` header only into its local `/api` proxy requests. You do not enter a token in the browser. It is deliberately separate from `HUBSPOT_ACCESS_TOKEN` and is not placed in frontend source, browser storage, or `VITE_*` build-time variables.
+
+For a deployed system, place the API/dashboard behind SSO or an authenticated reverse proxy and replace the shared local-demo bearer token with the organization’s identity mechanism. The API is fail-closed: if `DASHBOARD_API_TOKEN` is absent, dashboard endpoints return `503 DASHBOARD_AUTH_NOT_CONFIGURED`; missing or invalid credentials return `401`.
+
+| Method | Endpoint | Result |
+| --- | --- | --- |
+| `GET` | `/api/syncs?orderStatus=FAILED` | Up to 50 latest attempt records, newest first; optional current-order status filter |
+| `GET` | `/api/syncs/stats` | Current `orders` counts: successful, failed, pending, and processing |
+| `GET` | `/api/syncs/:id` | One sync attempt with sanitized error and known HubSpot IDs |
+| `POST` | `/api/orders/:orderId/retry` | Atomically requeues an unclaimed failed order for the existing worker |
+
+All four endpoints require the dashboard bearer token. The list intentionally does not return webhook payloads. Each row’s status is the immutable processing-attempt outcome, so a `FAILED` attempt stays visibly failed even when its order has been scheduled back to `PENDING` for automatic retry. The current order status appears alongside it, plus the Contact/Deal IDs known when the row was read. This lets a retry retain partial HubSpot completion instead of creating a new remote Deal.
+
+Manual retry is allowed only while both the order and its durable job are `FAILED`. The database transaction conditionally changes the failed job to `PENDING`, clears its lease/scheduled error, and leaves `sync_attempts`, payload, HubSpot Contact ID, and HubSpot Deal ID untouched. Attempt numbers stay monotonic so audit history remains valid; an exhausted job receives one new bounded `WORKER_MAX_ATTEMPTS` allowance. A simultaneous second retry conditionally updates zero rows and receives `409 RETRY_NOT_AVAILABLE`. The normal database-backed worker claims the pending job; the dashboard never calls HubSpot directly.
+
+The dashboard includes summary cards, filtering, manual refresh, loading skeletons, empty/error states, accessible status labels, a confirmation dialog, disabled retry controls for non-failed orders, and success/error notices. Start `npm run worker` separately when you want requeued work to be processed.
 
 ## Checks
 
@@ -222,8 +247,8 @@ npm test
 npm run build
 ```
 
-`npm test` includes PostgreSQL integration coverage for valid, invalid, unsigned, tampered, duplicate, and concurrent webhook deliveries. It also has mock-based tests for contact/deal mapping, update-vs-create behavior, Deal recovery by `external_order_id`, association, and property verification. It makes no real HubSpot requests.
+`npm test` includes PostgreSQL integration coverage for valid, invalid, unsigned, tampered, duplicate, and concurrent webhook deliveries. It also has mock-based tests for contact/deal mapping, update-vs-create behavior, Deal recovery by `external_order_id`, association, property verification, dashboard API authentication/response structure/retry conflict behavior, and React dashboard loading/retry interactions. It makes no real HubSpot requests.
 
 ## Current scope
 
-Phase 4 is complete: the API safely accepts durable local work, the separate worker synchronizes an idempotent Contact/Deal association, and transient HubSpot failures are scheduled for durable retry with attempt history and lease recovery. Dashboard operations and the Python exporter are intentionally deferred to later phases.
+Phase 5 is complete: the API safely accepts durable local work, the separate worker synchronizes an idempotent Contact/Deal association, transient HubSpot failures are scheduled for durable retry with attempt history and lease recovery, and the protected React dashboard monitors/requeues failed orders. The Python exporter remains intentionally deferred to Phase 6.

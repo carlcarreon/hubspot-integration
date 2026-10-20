@@ -291,19 +291,19 @@ The layout is a recommendation. Adjust only when it clearly simplifies implement
 - [x] Make processing jobs restart-safe through exact lease ownership, expired-lease recovery, and scheduled retry claiming.
 - [x] Handle HubSpot success followed by a lost HTTP response without duplicates via persisted IDs and `external_order_id` reconciliation.
 - [x] Add an opt-in PostgreSQL verification suite with mocked HubSpot 429/500/503/400 responses and no real HubSpot writes.
-- [ ] Ensure failed orders can be manually requeued without racing an active worker. (Phase 5 API/dashboard work.)
+- [x] Ensure failed orders can be manually requeued without racing an active worker. (Phase 5 API/dashboard work.)
 
 **Acceptance:** transient failures recover through durable scheduled retries; exhausted/permanent failures have inspectable attempt history; interrupted and partially successful operations resume safely without duplicate Deals.
 
 ### Phase 5 — Dashboard
 
-- [ ] Implement sync list/details/statistics endpoints and retry endpoint.
-- [ ] Implement React dashboard with recent 50 attempts and status summaries.
-- [ ] Display readable errors and available HubSpot IDs.
-- [ ] Wire retry button to real authenticated API; loading/success/error states work.
-- [ ] Validate UI against real PostgreSQL records and mock HubSpot failures.
+- [x] Implement protected sync list/details/statistics endpoints and retry endpoint.
+- [x] Implement React dashboard with recent 50 attempts and status summaries.
+- [x] Display sanitized errors and available HubSpot IDs.
+- [x] Wire retry button to the real authenticated API; loading/success/error states work.
+- [x] Add API and React tests for authentication, response shape/order, retry conflict handling, loading, and retry behavior.
 
-**Acceptance:** a failed sync appears in the dashboard, retry queues a new attempt, and status changes after processing.
+**Acceptance:** a failed sync appears in the dashboard, an authorized retry atomically queues it for the existing worker, and its status changes after processing. Summary cards count current `orders` states; the table is the last 50 immutable processing attempts.
 
 ### Phase 6 — Python accounting export
 
@@ -341,8 +341,8 @@ The layout is a recommendation. Adjust only when it clearly simplifies implement
 - [x] Deal creation succeeded but response was lost: recovery uses external ID
 - [x] Association failure preserves IDs so retry does not recreate Deal
 - [x] Sync records contain attempt history, HubSpot IDs, errors, timestamps
-- [ ] Dashboard shows the 50 most recent attempts
-- [ ] Manual retry of failed order works and blocks duplicate claims
+- [x] Dashboard shows the 50 most recent attempts
+- [x] Manual retry of failed order works and blocks duplicate claims
 - [x] Expired processing jobs survive worker restart through safe lease recovery
 - [x] Development-only PostgreSQL verification demonstrates retry scheduling, exhaustion, attempt history, and lease recovery
 - [ ] Python CSV uses create date, covers entire window, paginates, and includes headers

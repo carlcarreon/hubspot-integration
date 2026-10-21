@@ -7,12 +7,7 @@ export function pageRange(totalPages: number, currentPage: number, edgeCount = 3
   }
   const pages = new Set<number>();
   for (let page = 1; page <= Math.min(edgeCount, totalPages); page += 1) pages.add(page);
-  for (
-    let page = Math.max(1, currentPage - neighborCount);
-    page <= Math.min(totalPages, currentPage + neighborCount);
-    page += 1
-  )
-    pages.add(page);
+  for (let page = Math.max(1, currentPage - neighborCount); page <= Math.min(totalPages, currentPage + neighborCount); page += 1) pages.add(page);
   for (let page = Math.max(1, totalPages - edgeCount + 1); page <= totalPages; page += 1) pages.add(page);
 
   const result: PageItem[] = [];

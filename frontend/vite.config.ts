@@ -7,18 +7,12 @@ import { defineConfig, loadEnv } from 'vite';
 export default defineConfig(({ mode }) => {
   // The root .env stays on the development server. Its dashboard token is
   // injected into the proxy request and is never exposed as a VITE_* value.
-  const frontendRoot = dirname(fileURLToPath(import.meta.url));
-  const projectRoot = resolve(frontendRoot, '..');
+  const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const environment = loadEnv(mode, projectRoot, '');
   const dashboardApiToken = environment.DASHBOARD_API_TOKEN;
 
   return {
     plugins: [react(), tailwindcss()],
-    resolve: {
-      alias: {
-        '@': resolve(frontendRoot, 'src'),
-      },
-    },
     server: {
       port: 5173,
       proxy: {
